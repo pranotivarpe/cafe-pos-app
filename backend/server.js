@@ -27,6 +27,8 @@ app.get('/api/protected', require('./src/middleware/auth'), (req, res) => {
     res.json({ msg: 'Protected OK', user: req.user });
 });
 
+app.use('/api/menu', require('./src/routes/menu'));
+
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
     console.log(`🚀 Server on http://localhost:${PORT}`);

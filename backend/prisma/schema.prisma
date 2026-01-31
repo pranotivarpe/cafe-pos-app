@@ -8,9 +8,37 @@ datasource db {
 }
 
 model User {
-  id       Int    @id @default(autoincrement())
-  email    String @unique
-  password String
-  role     String @default("owner")
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  role      String   @default("owner")
   createdAt DateTime @default(now())
 }
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique // Drinks, Snacks, Meals
+  createdAt DateTime  @default(now())
+  items     MenuItem[]
+}
+
+model MenuItem {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  price       Decimal   @db.Decimal(10, 2)
+  categoryId  Int
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  inventory   Inventory?
+  createdAt   DateTime  @default(now())
+}
+
+model Inventory {
+  id         Int      @id @default(autoincrement())
+  menuItemId Int      @unique
+  quantity   Int      @default(0)
+  lowStock   Boolean  @default(false)
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  updatedAt  DateTime @updatedAt
+}
+
