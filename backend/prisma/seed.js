@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
@@ -6,17 +7,24 @@ const prisma = new PrismaClient();
 async function main() {
     console.log('🌱 Starting full seed...');
 
-    // 1. Owner
-    await prisma.user.upsert({
-        where: { email: 'owner@cafepos.com' },
-        update: {},
-        create: {
-            email: 'owner@cafepos.com',
-            password: bcrypt.hashSync('owner123', 12),
-            role: 'owner'
-        }
-    });
-    console.log('✅ Owner seeded');
+    // Create owner only if explicit env vars provided (no defaults)
+    const ownerEmail = process.env.SEED_OWNER_EMAIL;
+    const ownerPassword = process.env.SEED_OWNER_PASSWORD;
+
+    if (ownerEmail && ownerPassword) {
+        await prisma.user.upsert({
+            where: { email: ownerEmail },
+            update: {},
+            create: {
+                email: ownerEmail,
+                password: bcrypt.hashSync(ownerPassword, 12),
+                role: 'owner'
+            }
+        });
+        console.log('✅ Owner seeded');
+    } else {
+        console.log('ℹ️ Skipping owner creation. To create an owner, set SEED_OWNER_EMAIL and SEED_OWNER_PASSWORD in your environment.');
+    }
 
     // 2. Categories
     const drinks = await prisma.category.upsert({
@@ -101,7 +109,7 @@ async function main() {
     });
     console.log('✅ 10 Tables seeded (Table 1-10)');
 
-    console.log('🎉 FULL SEED COMPLETE!');
+    console.log('��� FULL SEED COMPLETE!');
 }
 
 main()

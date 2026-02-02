@@ -71,15 +71,16 @@ model OrderItem {
 
 
 model Table {
-  id            Int       @id @default(autoincrement())
+  id            Int        @id @default(autoincrement())
   name          String
   status        TableStatus @default(AVAILABLE)
-  currentBill   Float?    @default(0)
-  orderTime     String?
+  currentBill   Float?     @default(0)
+  orderTime     DateTime?               // changed from String? to DateTime?
   customerName  String?
   customerPhone String?
-  reservedUntil String?
-  updatedAt     DateTime  @updatedAt
+  reservedFrom  DateTime?               // NEW: reservation start
+  reservedUntil DateTime?               // changed to DateTime?
+  updatedAt     DateTime   @updatedAt
   orders        Order[]   @relation 
   @@map("tables")
 }
@@ -89,4 +90,3 @@ enum TableStatus {
   OCCUPIED  
   RESERVED
 }
-
