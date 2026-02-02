@@ -7,7 +7,6 @@ import {
   AlertCircle,
   Eye,
   Printer,
-  Filter,
   Search,
   ChefHat,
   DollarSign,
@@ -41,6 +40,7 @@ const OrdersPage = () => {
 
   useEffect(() => {
     filterOrders();
+    // eslint-disable-next-line
   }, [orders, selectedStatus, searchTerm]);
 
   const fetchOrders = async () => {

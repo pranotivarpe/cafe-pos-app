@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../prisma');
 
 // Generate unique bill number
 const generateBillNumber = () => {
@@ -15,59 +14,46 @@ const generateBillNumber = () => {
 exports.createOrder = async (req, res, next) => {
     try {
         const { tableId, orderItems } = req.body;
-        // orderItems format: [{ menuItemId: 1, quantity: 2, price: 50 }]
-
-        // Validation
         if (!tableId || !orderItems || orderItems.length === 0) {
             return res.status(400).json({ error: 'Table and order items are required' });
         }
 
-        // Check stock availability for all items
+        // Validate and check stock
         for (const item of orderItems) {
             const inventory = await prisma.inventory.findUnique({
                 where: { menuItemId: item.menuItemId }
             });
 
             if (!inventory) {
-                const menuItem = await prisma.menuItem.findUnique({
-                    where: { id: item.menuItemId }
-                });
-                return res.status(400).json({
-                    error: `No inventory found for ${menuItem?.name}`
-                });
+                const menuItem = await prisma.menuItem.findUnique({ where: { id: item.menuItemId } });
+                return res.status(400).json({ error: `No inventory found for ${menuItem?.name || 'item'}` });
             }
 
             if (inventory.quantity < item.quantity) {
-                const menuItem = await prisma.menuItem.findUnique({
-                    where: { id: item.menuItemId }
-                });
+                const menuItem = await prisma.menuItem.findUnique({ where: { id: item.menuItemId } });
                 return res.status(400).json({
-                    error: `Insufficient stock for ${menuItem?.name}. Available: ${inventory.quantity}`
+                    error: `Insufficient stock for ${menuItem?.name || 'item'}. Available: ${inventory.quantity}`
                 });
             }
         }
 
-        // Calculate totals
         const subtotal = orderItems.reduce((sum, item) =>
-            sum + (parseFloat(item.price) * item.quantity), 0
+            sum + (parseFloat(item.price) * Number(item.quantity)), 0
         );
-        const tax = subtotal * 0.05; // 5% GST
+        const tax = subtotal * 0.05;
         const total = subtotal + tax;
 
-        // Generate bill number
         const billNumber = generateBillNumber();
 
-        // Create order in transaction
         const order = await prisma.$transaction(async (tx) => {
-            // Create order
             const newOrder = await tx.order.create({
                 data: {
-                    tableId: parseInt(tableId),
+                    tableId: parseInt(tableId, 10),
                     billNumber,
                     subtotal,
                     tax,
                     total,
-                    status: 'pending',
+                    status: 'pending', // store as uppercase for consistency
                     items: {
                         create: orderItems.map(item => ({
                             menuItemId: item.menuItemId,
@@ -80,33 +66,28 @@ exports.createOrder = async (req, res, next) => {
                     table: true,
                     items: {
                         include: {
-                            menuItem: {
-                                include: { category: true }
-                            }
+                            menuItem: { include: { category: true } }
                         }
                     }
                 }
             });
 
-            // Deduct inventory
+            // Deduct inventory and compute lowStock
             for (const item of orderItems) {
+                const inv = await tx.inventory.findUnique({ where: { menuItemId: item.menuItemId } });
                 await tx.inventory.update({
                     where: { menuItemId: item.menuItemId },
                     data: {
                         quantity: { decrement: item.quantity },
-                        lowStock: {
-                            set: await tx.inventory.findUnique({
-                                where: { menuItemId: item.menuItemId }
-                            }).then(inv => (inv.quantity - item.quantity) < 10)
-                        }
+                        lowStock: (inv.quantity - item.quantity) < 10
                     }
                 });
             }
 
-            // Update table status to occupied
+            // Update table status to OCCUPIED (enum)
             await tx.table.update({
-                where: { id: parseInt(tableId) },
-                data: { status: 'occupied' }
+                where: { id: parseInt(tableId, 10) },
+                data: { status: 'OCCUPIED' }
             });
 
             return newOrder;
@@ -119,7 +100,8 @@ exports.createOrder = async (req, res, next) => {
         });
     } catch (error) {
         console.error('Create order error:', error);
-        next(error);
+        // give a clear response instead of throwing internals
+        return res.status(500).json({ error: 'Failed to create order' });
     }
 };
 
@@ -134,7 +116,7 @@ exports.getTables = async (req, res, next) => {
                     take: 1
                 }
             },
-            orderBy: { number: 'asc' }
+            orderBy: { id: 'asc' } // changed from number -> id
         });
         res.json(tables);
     } catch (error) {
@@ -189,16 +171,17 @@ exports.getActiveOrders = async (req, res, next) => {
 };
 
 // Update order status
-// Update the updateOrderStatus function
 exports.updateOrderStatus = async (req, res) => {
     try {
-        const { status, paymentMode } = req.body;
-        const orderId = parseInt(req.params.id);
+        const { status: rawStatus, paymentMode } = req.body;
+        const orderId = parseInt(req.params.id, 10);
+        if (!Number.isFinite(orderId)) return res.status(400).json({ error: 'Invalid order id' });
+
+        const status = String(rawStatus || '').toLowerCase();
 
         const updateData = { status };
 
-        // Add payment details if status is paid
-        if (status === 'paid' && paymentMode) {
+        if (status === 'PAID' && paymentMode) {
             updateData.paymentMode = paymentMode;
             updateData.paidAt = new Date();
         }
@@ -208,17 +191,16 @@ exports.updateOrderStatus = async (req, res) => {
             data: updateData,
             include: {
                 table: true,
-                items: {
-                    include: { menuItem: true }
-                }
+                items: { include: { menuItem: true } }
             }
         });
 
         // Free table if paid or cancelled
-        if (status === 'paid' || status === 'cancelled') {
+        if (status === 'PAID' || status === 'CANCELLED') {
+            // set table status to AVAILABLE (enum)
             await prisma.table.update({
                 where: { id: order.tableId },
-                data: { status: 'available' }
+                data: { status: 'AVAILABLE', currentBill: 0, orderTime: null, customerName: null, customerPhone: null, reservedFrom: null, reservedUntil: null }
             });
         }
 
@@ -234,11 +216,23 @@ exports.updateOrderStatus = async (req, res) => {
 exports.updateTableStatus = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { status } = req.body;
+        const { status: rawStatus } = req.body;
+        const status = String(rawStatus || '').toUpperCase();
+
+        const updateData = { status };
+
+        if (status === 'AVAILABLE') {
+            updateData.currentBill = 0;
+            updateData.orderTime = null;
+            updateData.customerName = null;
+            updateData.customerPhone = null;
+            updateData.reservedUntil = null;
+            updateData.reservedFrom = null;
+        }
 
         const table = await prisma.table.update({
-            where: { id: parseInt(id) },
-            data: { status },
+            where: { id: parseInt(id, 10) },
+            data: updateData,
             include: { orders: true }
         });
 

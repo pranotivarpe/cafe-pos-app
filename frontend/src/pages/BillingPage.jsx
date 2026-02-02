@@ -9,11 +9,6 @@ import {
   Minus,
   Search,
   X,
-  Check,
-  AlertCircle,
-  CreditCard,
-  Banknote,
-  Smartphone,
   ChefHat,
 } from "lucide-react";
 import Navbar from "../components/navbar";
@@ -28,27 +23,64 @@ const BillingPage = () => {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [loading, setLoading] = useState(false);
 
+  // normalize status for comparisons
+  const getStatus = (s) => String(s || "").toLowerCase();
+
+  // Safe label for a table (prefer number, fallback to name, fallback id)
+  const getTableLabel = (t) => {
+    if (!t) return "";
+    if (typeof t.number !== "undefined" && t.number !== null) return t.number;
+    if (typeof t.name === "string" && t.name.trim() !== "") return t.name;
+    // Some backends might use 'label' or 'tableNumber' — try common aliases
+    if (typeof t.tableNumber !== "undefined" && t.tableNumber !== null)
+      return t.tableNumber;
+    if (typeof t.label === "string" && t.label.trim() !== "") return t.label;
+    return `#${t.id}`;
+  };
+
   // Fetch tables on mount
   useEffect(() => {
     fetchTables();
+    const interval = setInterval(fetchTables, 30000); // 30s refresh
+    return () => clearInterval(interval);
   }, []);
 
+  // Robust fetch: try primary endpoint, fallback to alternative. Use allSettled for diagnostics.
   const fetchTables = async () => {
     try {
-      const res = await axios.get("/api/orders/tables");
-      setTables(res.data);
-      // Auto-select first available table
-      const firstAvailable = res.data.find((t) => t.status === "available");
-      if (firstAvailable) {
-        setTableId(firstAvailable.id);
+      const results = await Promise.allSettled([
+        axios.get("/api/orders/tables"),
+        axios.get("/api/tables"),
+      ]);
+      let chosen = null;
+      for (const r of results) {
+        if (r.status === "fulfilled" && Array.isArray(r.value.data)) {
+          chosen = r.value.data;
+          break;
+        }
       }
+      const raw =
+        chosen ||
+        results.find((r) => r.status === "fulfilled")?.value?.data ||
+        [];
+      const normalized = (Array.isArray(raw) ? raw : []).map((t) => ({
+        ...t,
+        id: typeof t.id === "number" ? t.id : parseInt(t.id, 10),
+        status: t.status ?? t.Status ?? t.STATUS ?? "",
+      }));
+      setTables(normalized);
+      const firstAvailable = normalized.find(
+        (t) => getStatus(t.status) === "available",
+      );
+      setTableId(firstAvailable ? Number(firstAvailable.id) : null);
     } catch (err) {
       console.error("Failed to fetch tables:", err);
+      setTables([]);
+      setTableId(null);
     }
   };
 
   const addToCart = (item) => {
-    // Check if item is in stock
     if (!item.inventory || item.inventory.quantity <= 0) {
       alert(`❌ ${item.name} is out of stock!`);
       return;
@@ -57,14 +89,12 @@ const BillingPage = () => {
     const existing = cart.find((c) => c.id === item.id);
 
     if (existing) {
-      // Check if adding one more exceeds stock
       if (existing.quantity + 1 > item.inventory.quantity) {
         alert(
           `❌ Only ${item.inventory.quantity} ${item.name} available in stock!`,
         );
         return;
       }
-
       setCart(
         cart.map((c) =>
           c.id === item.id ? { ...c, quantity: c.quantity + 1 } : c,
@@ -83,25 +113,19 @@ const BillingPage = () => {
       setCart(cart.filter((c) => c.id !== itemId));
       return;
     }
-
-    // Check stock before updating
     const item = menuItems.find((m) => m.id === itemId);
     if (item && item.inventory && qty > item.inventory.quantity) {
       alert(`❌ Only ${item.inventory.quantity} ${item.name} available!`);
       return;
     }
-
     setCart(cart.map((c) => (c.id === itemId ? { ...c, quantity: qty } : c)));
   };
 
-  const removeFromCart = (itemId) => {
+  const removeFromCart = (itemId) =>
     setCart(cart.filter((c) => c.id !== itemId));
-  };
 
   const clearCart = () => {
-    if (window.confirm("Clear entire cart?")) {
-      setCart([]);
-    }
+    if (window.confirm("Clear entire cart?")) setCart([]);
   };
 
   const placeOrder = async () => {
@@ -109,23 +133,38 @@ const BillingPage = () => {
       alert("❌ Cart is empty!");
       return;
     }
-
     if (!tableId) {
       alert("❌ Please select a table!");
       return;
     }
-
-    if (
-      !window.confirm(
-        `Place order for Table ${
-          tables.find((t) => t.id === tableId)?.number
-        }?\n\n` +
-          `Items: ${cart.length}\n` +
-          `Total: ₹${total.toFixed(2)}\n\n` +
-          `Order will be sent to kitchen.`,
-      )
-    ) {
+    const table = tables.find((t) => t.id === tableId);
+    if (!table) {
+      alert("Invalid table selected");
       return;
+    }
+
+    if (getStatus(table.status) === "reserved") {
+      const from = table.reservedFrom ? new Date(table.reservedFrom) : null;
+      const to = table.reservedUntil ? new Date(table.reservedUntil) : null;
+      const now = new Date();
+      if (from && to) {
+        if (now < from || now > to) {
+          alert(
+            `❌ Table ${getTableLabel(
+              table,
+            )} is reserved from ${from.toLocaleString()} to ${to.toLocaleString()}. Orders can be placed only during the reserved window.`,
+          );
+          return;
+        }
+      } else {
+        // If reserved but no window available, block placing orders to be safe
+        alert(
+          `❌ Table ${getTableLabel(
+            table,
+          )} is reserved. You can only place orders during the reservation window.`,
+        );
+        return;
+      }
     }
 
     setLoading(true);
@@ -136,28 +175,23 @@ const BillingPage = () => {
         price: item.price,
       }));
 
-      // Create order - starts as PENDING
-      const res = await axios.post("/api/orders", {
-        tableId,
-        orderItems,
-      });
+      const res = await axios.post("/api/orders", { tableId, orderItems });
+      const createdOrder = res.data?.order || res.data;
+      const billNumber = res.data?.billNumber ?? createdOrder?.billNumber;
 
-      // Immediately move to PREPARING (kitchen receives order)
-      await axios.put(`/api/orders/${res.data.order.id}/status`, {
+      if (!createdOrder || !createdOrder.id) {
+        throw new Error("Invalid order response");
+      }
+
+      // Move to preparing
+      await axios.put(`/api/orders/${createdOrder.id}/status`, {
         status: "preparing",
       });
 
       alert(
-        `✅ Order ${res.data.billNumber} sent to kitchen!\n\n` +
-          `📋 Table: ${tables.find((t) => t.id === tableId)?.number}\n` +
-          `🍽️ Items: ${cart.length}\n` +
-          `💰 Amount: ₹${total.toFixed(2)}\n\n` +
-          `🔔 Status: PREPARING\n\n` +
-          `Track order progress in Orders page.\n` +
-          `Payment will be collected after serving.`,
+        `✅ Order ${billNumber} sent to kitchen for Table ${getTableLabel}`,
       );
 
-      // Clear cart and refresh
       setCart([]);
       fetchTables();
     } catch (err) {
@@ -171,10 +205,9 @@ const BillingPage = () => {
     (sum, item) => sum + item.price * item.quantity,
     0,
   );
-  const tax = subtotal * 0.05; // 5% GST
+  const tax = subtotal * 0.05;
   const total = subtotal + tax;
 
-  // Filter menu items
   const categories = [
     "All",
     ...new Set(menuItems.map((item) => item.category?.name).filter(Boolean)),
@@ -209,22 +242,37 @@ const BillingPage = () => {
                   Table:
                 </label>
                 <select
-                  value={tableId || ""}
-                  onChange={(e) => setTableId(parseInt(e.target.value))}
+                  value={tableId ?? ""}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setTableId(Number.isFinite(val) ? val : null);
+                  }}
                   className="px-4 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium focus:border-red-300 focus:outline-none bg-white hover:border-gray-300 transition-colors"
                 >
                   <option value="">Select Table</option>
+                  {tables.length === 0 && (
+                    <option disabled>— No tables available —</option>
+                  )}
                   {tables.map((table) => (
                     <option key={table.id} value={table.id}>
-                      Table {table.number} - {table.status}
+                      Table {getTableLabel(table)} -{" "}
+                      {String(table.status ?? "").toUpperCase()}
                     </option>
                   ))}
                 </select>
               </div>
+              <button
+                onClick={fetchTables}
+                className="px-3 py-2 text-sm rounded-lg bg-gray-100 hover:bg-gray-200"
+              >
+                Refresh
+              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* ... rest of UI is unchanged (menu grid + cart) ... */}
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -291,7 +339,7 @@ const BillingPage = () => {
                           : "bg-green-100 text-green-700"
                       }`}
                     >
-                      {item.inventory?.quantity || 0}
+                      {item.inventory?.quantity ?? 0}
                     </span>
                   </div>
                   {item.inventory?.quantity === 0 && (
@@ -334,7 +382,9 @@ const BillingPage = () => {
                 </div>
                 <p className="text-sm text-gray-500">
                   {tableId
-                    ? `Table ${tables.find((t) => t.id === tableId)?.number}`
+                    ? `Table ${getTableLabel(
+                        tables.find((t) => t.id === tableId),
+                      )}`
                     : "No table selected"}{" "}
                   • {cart.length} items
                 </p>
@@ -406,7 +456,6 @@ const BillingPage = () => {
               {/* Cart Footer */}
               {cart.length > 0 && (
                 <div className="p-6 border-t border-gray-200 space-y-4">
-                  {/* Totals */}
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm text-gray-600">
                       <span>Subtotal</span>
@@ -424,7 +473,6 @@ const BillingPage = () => {
                     </div>
                   </div>
 
-                  {/* Place Order Button */}
                   <button
                     onClick={placeOrder}
                     disabled={!tableId || loading}

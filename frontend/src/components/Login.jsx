@@ -4,10 +4,17 @@ import { LogIn, ShoppingCart, Mail, Lock, AlertCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 const Login = () => {
-  const [form, setForm] = useState({
-    email: "owner@cafepos.com",
-    password: "owner123",
-  });
+  // Prefill only when explicitly enabled (dev + opt-in)
+  const isDevPrefill =
+    process.env.NODE_ENV === "development" &&
+    process.env.REACT_APP_PREFILL_DEMO === "true";
+
+  const initialForm = {
+    email: isDevPrefill ? process.env.REACT_APP_DEMO_EMAIL || "" : "",
+    password: isDevPrefill ? process.env.REACT_APP_DEMO_PASSWORD || "" : "",
+  };
+
+  const [form, setForm] = useState(initialForm);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
@@ -26,6 +33,11 @@ const Login = () => {
       setLoading(false);
     }
   };
+
+  // Show demo panel only when explicitly enabled
+  const showDemoPanel = process.env.REACT_APP_SHOW_DEMO === "true";
+  const demoEmail = process.env.REACT_APP_DEMO_EMAIL || "";
+  const demoPassword = process.env.REACT_APP_DEMO_PASSWORD || "";
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -113,20 +125,24 @@ const Login = () => {
           </form>
         </div>
 
-        {/* Demo Credentials */}
-        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <p className="text-xs font-semibold text-blue-900 mb-2">
-            Demo Credentials:
-          </p>
-          <div className="text-xs text-blue-700 space-y-1">
-            <p>
-              <span className="font-medium">Email:</span> owner@cafepos.com
+        {/* Demo Credentials (only when explicitly enabled) */}
+        {showDemoPanel && (
+          <div className="mt-6 bg-blue-50 border border-blue-200 rounded-xl p-4">
+            <p className="text-xs font-semibold text-blue-900 mb-2">
+              Demo Credentials:
             </p>
-            <p>
-              <span className="font-medium">Password:</span> owner123
-            </p>
+            <div className="text-xs text-blue-700 space-y-1">
+              <p>
+                <span className="font-medium">Email:</span>{" "}
+                {demoEmail || "<set REACT_APP_DEMO_EMAIL>"}
+              </p>
+              <p>
+                <span className="font-medium">Password:</span>{" "}
+                {demoPassword ? "••••••••" : "<set REACT_APP_DEMO_PASSWORD>"}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-500 mt-8">

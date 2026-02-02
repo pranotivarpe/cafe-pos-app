@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../prisma');
 
 // Get all inventory
 exports.getInventory = async (req, res, next) => {
@@ -19,11 +18,18 @@ exports.updateStock = async (req, res, next) => {
         const { id } = req.params;
         const { quantity } = req.body;
 
+        const parsedId = parseInt(id, 10);
+        const q = Number(quantity);
+
+        if (!Number.isFinite(parsedId) || !Number.isFinite(q) || q < 0) {
+            return res.status(400).json({ error: 'Invalid table id or quantity' });
+        }
+
         const inventory = await prisma.inventory.update({
-            where: { id: parseInt(id) },
+            where: { id: parsedId },
             data: {
-                quantity: parseInt(quantity),
-                lowStock: parseInt(quantity) < 10 // Auto-detect low stock
+                quantity: Math.floor(q),
+                lowStock: Math.floor(q) < 10 // Auto-detect low stock
             },
             include: { menuItem: true }
         });

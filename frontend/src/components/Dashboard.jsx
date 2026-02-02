@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useAuth } from "../context/AuthContext";
 import { useMenu } from "../context/MenuContext";
 import {
   DollarSign,
@@ -17,8 +16,9 @@ import axios from "axios";
 import Navbar from "../components/navbar";
 
 const Dashboard = () => {
-  const { user: _user } = useAuth(); // Prefixed to avoid unused warning
   const { menuItems } = useMenu();
+
+  // Core states
   const [stats, setStats] = useState({
     todaySales: 0,
     todayOrders: 0,
@@ -27,6 +27,8 @@ const Dashboard = () => {
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Dashboard-specific states
   const [selectedSection, setSelectedSection] = useState("All Tables");
   const [tables, setTables] = useState([]);
   const [recentOrders, setRecentOrders] = useState([]);
@@ -35,32 +37,85 @@ const Dashboard = () => {
     tableId: "",
     customerName: "",
     customerPhone: "",
+    reservedFrom: "",
     reservedUntil: "",
   });
-  const [showClearConfirm, setShowClearConfirm] = useState(null);
 
-  const sections = ["All Tables"];
+  // Sections shown as filter buttons
+  const sections = ["All Tables", "Available", "Occupied", "Reserved"];
 
-  //  fetchDashboardData function:
+  // Helper - normalize status strings so frontend and backend case differences don't break logic
+  const getStatus = (status) => String(status || "").toLowerCase();
+
+  const getTableColor = (status) => {
+    switch (getStatus(status)) {
+      case "occupied":
+        return "bg-red-50 border-red-200";
+      case "reserved":
+        return "bg-yellow-50 border-yellow-300";
+      case "available":
+      default:
+        return "bg-white border-gray-200";
+    }
+  };
+
+  const getStatusBadge = (status) => {
+    switch (getStatus(status)) {
+      case "occupied":
+        return "bg-red-500";
+      case "reserved":
+        return "bg-yellow-500";
+      case "available":
+      default:
+        return "bg-gray-400";
+    }
+  };
+
+  // Fetch dashboard data (tables, orders, stats)
   const fetchDashboardData = useCallback(async () => {
+    setRefreshing(true);
     try {
-      setRefreshing(true);
-      const [statsRes, tablesRes, ordersRes] = await Promise.all([
+      const results = await Promise.allSettled([
         axios.get("/api/reports/stats"),
-        axios.get("/api/tables"), // ← REAL DATABASE TABLES
+        axios.get("/api/tables"),
         axios.get("/api/reports/recent-orders?limit=5"),
       ]);
 
-      console.log("🪑 RAW TABLES API:", tablesRes.data);
-      console.log("📊 STATS API:", statsRes.data);
+      const [statsRes, tablesRes, ordersRes] = results;
 
-      // ✅ ONLY REAL DATA - NO FALLBACK
-      setStats(statsRes.data);
-      setTables(tablesRes.data || []); // Empty array if no tables
-      setRecentOrders(ordersRes.data.slice(0, 5) || []);
+      if (tablesRes.status === "fulfilled") {
+        setTables(tablesRes.value.data || []);
+        console.log("🪑 RAW TABLES API:", tablesRes.value.data);
+      } else {
+        console.warn("Tables fetch failed:", tablesRes.reason);
+        setTables([]); // fallback
+      }
+
+      if (statsRes.status === "fulfilled") {
+        setStats(statsRes.value.data || {});
+        console.log("📊 STATS API:", statsRes.value.data);
+      } else {
+        console.warn("Stats fetch failed:", statsRes.reason);
+        // keep existing stats or set defaults
+        setStats({
+          todaySales: 0,
+          todayOrders: 0,
+          lowStockCount: 0,
+          totalItemsSold: 0,
+        });
+      }
+
+      if (ordersRes.status === "fulfilled") {
+        setRecentOrders((ordersRes.value.data || []).slice(0, 5));
+      } else {
+        console.warn("Recent orders fetch failed:", ordersRes.reason);
+        setRecentOrders([]);
+      }
     } catch (err) {
-      console.error("Failed to fetch dashboard data:", err);
-      setTables([]); // ✅ EMPTY - no fake data
+      // should not reach here with allSettled, but keep for safety
+      console.error("Unexpected error fetching dashboard data:", err);
+      setTables([]);
+      setRecentOrders([]);
       setStats({
         todaySales: 0,
         todayOrders: 0,
@@ -78,80 +133,88 @@ const Dashboard = () => {
     fetchDashboardData();
     const interval = setInterval(fetchDashboardData, 30000);
     return () => clearInterval(interval);
-  }, [fetchDashboardData]); // Fixed dependency array
+  }, [fetchDashboardData]);
+
+  // Filter tables according to selectedSection
+  const filteredTables = tables.filter((t) => {
+    const s = selectedSection;
+    if (!t) return false;
+    const status = getStatus(t.status);
+    if (s === "All Tables") return true;
+    if (s === "Available") return status === "available";
+    if (s === "Occupied") return status === "occupied";
+    if (s === "Reserved") return status === "reserved";
+    return true;
+  });
+
+  // Quick action: clear table (mark as available) — basic implementation
+  const requestClearTable = async (tableId) => {
+    try {
+      // endpoint assumed: PUT /api/orders/tables/:id/status or a custom endpoint
+      // adjust to your API; here we call orders route provided in repo: /api/orders/tables/:id/status
+      await axios.put(`/api/orders/tables/${tableId}/status`, {
+        status: "AVAILABLE",
+      });
+      // refresh
+      fetchDashboardData();
+    } catch (err) {
+      console.error("Failed to clear table:", err);
+    }
+  };
 
   // Create reservation
   const createReservation = async (e) => {
     e.preventDefault();
+
+    const {
+      tableId,
+      customerName,
+      reservedFrom,
+      reservedUntil,
+    } = reservationData;
+    if (!tableId || !customerName || !reservedFrom || !reservedUntil) {
+      alert(
+        "Please fill table, customer name, start and end times for the reservation.",
+      );
+      return;
+    }
+
+    const from = new Date(reservedFrom);
+    const to = new Date(reservedUntil);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      alert("Invalid reservation dates.");
+      return;
+    }
+    if (from >= to) {
+      alert("Reservation start must be earlier than end.");
+      return;
+    }
+
     try {
-      await axios.post("/api/tables/reserve", reservationData);
+      // Send both start and end to backend
+      await axios.post("/api/tables/reserve", {
+        tableId,
+        customerName,
+        customerPhone: reservationData.customerPhone,
+        reservedFrom,
+        reservedUntil,
+      });
+
       setReservationData({
         tableId: "",
         customerName: "",
         customerPhone: "",
+        reservedFrom: "",
         reservedUntil: "",
       });
       setShowReservationForm(false);
       fetchDashboardData();
       alert("✅ Reservation created successfully!");
     } catch (err) {
+      console.error("Reservation error:", err);
       alert("❌ Failed to create reservation");
     }
   };
-
-  // Clear table with custom confirmation (NO confirm())
-  const requestClearTable = (tableId) => {
-    setShowClearConfirm(tableId);
-  };
-
-  const confirmClearTable = async () => {
-    if (showClearConfirm) {
-      try {
-        await axios.patch(`/api/tables/${showClearConfirm}/status`, {
-          status: "available",
-        });
-        fetchDashboardData();
-      } catch (err) {
-        alert("❌ Failed to update table");
-      }
-    }
-    setShowClearConfirm(null);
-  };
-
-  const getTableColor = (status) => {
-    const normalizedStatus = status?.toLowerCase();
-    switch (normalizedStatus) {
-      case "available":
-      case "AVAILABLE":
-        return "bg-white border-gray-200";
-      case "occupied":
-      case "OCCUPIED":
-        return "bg-red-50 border-red-300";
-      case "reserved":
-      case "RESERVED":
-        return "bg-yellow-50 border-yellow-300";
-      default:
-        return "bg-white border-gray-200";
-    }
-  };
-
-  const getStatusBadge = (status) => {
-    const normalizedStatus = status?.toLowerCase();
-    switch (normalizedStatus) {
-      case "occupied":
-      case "OCCUPIED":
-        return "bg-red-500";
-      case "reserved":
-      case "RESERVED":
-        return "bg-yellow-500";
-      case "available":
-      case "AVAILABLE":
-      default:
-        return "bg-gray-400";
-    }
-  };
-
-  const filteredTables = tables;
 
   if (loading) {
     return (
@@ -164,6 +227,12 @@ const Dashboard = () => {
       </div>
     );
   }
+
+  // Table occupancy percentage (safe guards)
+  const totalTables = tables.length || 1;
+  const occupiedCount = tables.filter((t) => getStatus(t.status) === "occupied")
+    .length;
+  const occupancyPct = Math.round((occupiedCount / totalTables) * 100);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -226,36 +295,18 @@ const Dashboard = () => {
                   Active Tables
                 </p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {tables.filter((t) => t.status === "occupied").length}
+                  {occupiedCount}
                 </p>
               </div>
             </div>
 
             <div className="flex items-center space-x-3 group hover:shadow-md transition-all p-3 rounded-xl">
-              <div
-                className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
-                  stats.lowStockCount > 0
-                    ? "bg-orange-100 group-hover:bg-orange-200"
-                    : "bg-green-100 group-hover:bg-green-200"
-                }`}
-              >
-                <AlertTriangle
-                  className={`w-6 h-6 transition-colors ${
-                    stats.lowStockCount > 0
-                      ? "text-orange-600"
-                      : "text-green-600"
-                  }`}
-                />
+              <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center group-hover:bg-orange-200 transition-colors">
+                <AlertTriangle className="w-6 h-6 text-orange-600" />
               </div>
               <div>
                 <p className="text-xs text-gray-500 font-medium">Low Stock</p>
-                <p
-                  className={`text-2xl font-bold transition-colors ${
-                    stats.lowStockCount > 0
-                      ? "text-orange-600"
-                      : "text-green-600"
-                  }`}
-                >
+                <p className="text-2xl font-bold text-gray-900">
                   {stats.lowStockCount || 0}
                 </p>
               </div>
@@ -264,371 +315,304 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Table Grid */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                {sections.map((section) => (
-                  <button
-                    key={section}
-                    onClick={() => setSelectedSection(section)}
-                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-                      selectedSection === section
-                        ? "bg-red-500 text-white shadow-md"
-                        : "bg-white text-gray-700 border border-gray-200 hover:border-red-300"
-                    }`}
-                  >
-                    {section}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center space-x-4 text-xs">
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-white border-2 border-gray-300 rounded"></div>
-                  <span className="text-gray-600">Available</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-red-100 border-2 border-red-400 rounded"></div>
-                  <span className="text-gray-600">Occupied</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-yellow-100 border-2 border-yellow-400 rounded"></div>
-                  <span className="text-gray-600">Reserved</span>
-                </div>
-              </div>
+      {/* Main */}
+      <div className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              {sections.map((section) => (
+                <button
+                  key={section}
+                  onClick={() => setSelectedSection(section)}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                    selectedSection === section
+                      ? "bg-red-500 text-white shadow-md"
+                      : "bg-white text-gray-700 border border-gray-200 hover:border-red-300"
+                  }`}
+                >
+                  {section}
+                </button>
+              ))}
             </div>
 
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
-              {filteredTables.map((table) => (
-                <Link
-                  key={table.id}
-                  to={`/billing?table=${table.id}`}
-                  className={`group relative ${getTableColor(
-                    table.status,
-                  )} border-2 rounded-2xl p-4 transition-all duration-300 hover:shadow-xl hover:-translate-y-1`}
-                >
-                  <div className="text-center">
-                    <div
-                      className={`w-14 h-14 mx-auto mb-2 rounded-xl flex items-center justify-center shadow-md transition-all duration-300 group-hover:scale-110 ${getStatusBadge(
-                        table.status,
-                      )} text-white`}
-                    >
-                      <span className="text-base font-bold">{table.id}</span>
-                    </div>
-                    <p className="font-semibold text-gray-900 text-sm mb-1">
-                      {table.name}
-                    </p>
-
-                    {table.status === "occupied" && (
-                      <div className="mt-2 pt-2 border-t border-gray-200 space-y-1">
-                        <p className="text-xs font-bold text-red-600">
-                          ₹{table.currentBill || 0}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {table.orderTime}
-                        </p>
-                      </div>
-                    )}
-
-                    {table.status === "reserved" && (
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-yellow-700">
-                          {table.customerName}
-                        </p>
-                        <p className="text-xs text-yellow-600">
-                          Until {table.reservedUntil}
-                        </p>
-                      </div>
-                    )}
-
-                    {table.status === "available" && (
-                      <p className="text-xs text-gray-400 mt-1">Empty</p>
-                    )}
-                  </div>
-
-                  {table.status === "occupied" && (
-                    <div className="absolute top-2 right-2 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          requestClearTable(table.id);
-                        }}
-                        className="p-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg shadow-md"
-                        title="Payment Done - Clear Table"
-                      >
-                        <CheckCircle className="w-3 h-3" />
-                      </button>
-                      <div className="p-1 bg-white rounded-lg shadow-md hover:bg-gray-50">
-                        <Eye className="w-3 h-3 text-gray-600" />
-                      </div>
-                    </div>
-                  )}
-                </Link>
-              ))}
+            <div className="flex items-center space-x-4 text-xs">
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-white border-2 border-gray-300 rounded"></div>
+                <span className="text-gray-600">Available</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-red-100 border-2 border-red-400 rounded"></div>
+                <span className="text-gray-600">Occupied</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-yellow-100 border-2 border-yellow-400 rounded"></div>
+                <span className="text-gray-600">Reserved</span>
+              </div>
             </div>
           </div>
 
-          {/* Sidebar - Recent Orders + Quick Stats + Reservation Form */}
-          <div className="lg:col-span-1 space-y-6">
-            {/* Recent Orders */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                <Clock className="w-5 h-5 mr-2 text-red-500" />
-                Recent Orders
-              </h3>
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {recentOrders.length > 0 ? (
-                  recentOrders.map((order) => (
-                    <div
-                      key={order.id}
-                      className="p-4 bg-gray-50 rounded-xl border border-gray-200 hover:shadow-md transition-all"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-bold text-gray-900">
-                          {order.id}
-                        </span>
-                        <span
-                          className={`text-xs px-2 py-1 rounded-full font-medium ${
-                            order.status === "preparing"
-                              ? "bg-yellow-100 text-yellow-700"
-                              : "bg-green-100 text-green-700"
-                          }`}
-                        >
-                          {order.status}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-600 mb-1">
-                        {order.table}
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
+            {filteredTables.map((table) => (
+              <Link
+                key={table.id}
+                to={`/billing?table=${table.id}`}
+                className={`group relative ${getTableColor(
+                  table.status,
+                )} border-2 rounded-2xl p-4 transition-all duration-300 hover:shadow-xl hover:-translate-y-1`}
+              >
+                <div className="text-center">
+                  <div
+                    className={`w-14 h-14 mx-auto mb-2 rounded-xl flex items-center justify-center shadow-md transition-all duration-300 group-hover:scale-110 ${getStatusBadge(
+                      table.status,
+                    )} text-white`}
+                  >
+                    <span className="text-base font-bold">{table.id}</span>
+                  </div>
+                  <p className="font-semibold text-gray-900 text-sm mb-1">
+                    {table.name}
+                  </p>
+
+                  {getStatus(table.status) === "occupied" && (
+                    <div className="mt-2 pt-2 border-t border-gray-200 space-y-1">
+                      <p className="text-xs font-bold text-red-600">
+                        ₹{table.currentBill || 0}
                       </p>
-                      <p className="text-xs text-gray-500 mb-2 line-clamp-1">
-                        {order.items}
-                      </p>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-bold text-red-600">
-                          ₹{order.amount}
-                        </span>
-                        <span className="text-xs text-gray-400">
-                          {order.time}
-                        </span>
-                      </div>
+                      <p className="text-xs text-gray-500">{table.orderTime}</p>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <Clock className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                    <p>No recent orders</p>
+                  )}
+
+                  {getStatus(table.status) === "reserved" && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-yellow-700">
+                        {table.customerName}
+                      </p>
+                      <p className="text-xs text-yellow-600">
+                        Until {table.reservedUntil}
+                      </p>
+                    </div>
+                  )}
+
+                  {getStatus(table.status) === "available" && (
+                    <p className="text-xs text-gray-400 mt-1">Empty</p>
+                  )}
+                </div>
+
+                {getStatus(table.status) === "occupied" && (
+                  <div className="absolute top-2 right-2 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        requestClearTable(table.id);
+                      }}
+                      className="p-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg shadow-md"
+                      title="Payment Done - Clear Table"
+                    >
+                      <CheckCircle className="w-3 h-3" />
+                    </button>
+                    <div className="p-1 bg-white rounded-lg shadow-md hover:bg-gray-50">
+                      <Eye className="w-3 h-3 text-gray-600" />
+                    </div>
                   </div>
                 )}
+              </Link>
+            ))}
+          </div>
+        </div>
+
+        {/* Sidebar - Recent Orders + Quick Stats + Reservation Form */}
+        <div className="lg:col-span-1 space-y-6">
+          {/* Recent Orders */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+              <Clock className="w-5 h-5 mr-2 text-red-500" />
+              Recent Orders
+            </h3>
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {recentOrders.length > 0 ? (
+                recentOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    className="p-4 bg-gray-50 rounded-xl border border-gray-200 hover:shadow-md transition-all"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-bold text-gray-900">
+                        {order.id}
+                      </span>
+                      <span className="text-xs px-2 py-1 rounded-full font-medium text-white bg-green-500">
+                        {order.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Table {order.tableId} •{" "}
+                      {new Date(order.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-8 text-sm text-gray-500">
+                  No recent orders
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Stats */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">
+              Quick Stats
+            </h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">Menu Items</span>
+                <span className="text-lg font-bold text-gray-900">
+                  {menuItems.length}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">Total Items Sold</span>
+                <span className="text-lg font-bold text-gray-900">
+                  {stats.totalItemsSold || 0}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">Table Occupancy</span>
+                <span className="text-lg font-bold text-blue-600">
+                  {occupancyPct}%
+                </span>
               </div>
             </div>
 
-            {/* Quick Stats */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">
-                Quick Stats
-              </h3>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Menu Items</span>
-                  <span className="text-lg font-bold text-gray-900">
-                    {menuItems.length}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">
-                    Total Items Sold
-                  </span>
-                  <span className="text-lg font-bold text-gray-900">
-                    {stats.totalItemsSold || 0}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Table Occupancy</span>
-                  <span className="text-lg font-bold text-blue-600">
-                    {Math.round(
-                      (tables.filter((t) => t.status === "occupied").length /
-                        tables.length) *
-                        100,
-                    )}
-                    %
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* NEW RESERVATION BUTTON */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 text-center">
+            <div className="mt-6">
               <button
                 onClick={() => setShowReservationForm(true)}
-                className="w-full flex items-center justify-center space-x-2 px-4 py-3 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold rounded-xl shadow-md hover:shadow-lg transition-all"
+                className="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded-xl bg-gradient-to-r from-red-500 to-red-600 text-white font-semibold"
               >
-                <Plus className="w-5 h-5" />
+                <Plus className="w-4 h-4" />
                 <span>New Reservation</span>
               </button>
             </div>
           </div>
+
+          {/* Reservation modal */}
+          {showReservationForm && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-xl font-bold text-gray-900">
+                    New Reservation
+                  </h3>
+                  <button
+                    onClick={() => setShowReservationForm(false)}
+                    className="text-gray-400 hover:text-gray-600 p-1 -m-1 rounded-lg hover:bg-gray-100"
+                  >
+                    <svg
+                      className="w-6 h-6"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                <form onSubmit={createReservation}>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Table ID
+                      </label>
+                      <input
+                        value={reservationData.tableId}
+                        onChange={(e) =>
+                          setReservationData({
+                            ...reservationData,
+                            tableId: e.target.value,
+                          })
+                        }
+                        className="w-full p-3 border border-gray-200 rounded-xl"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Customer Name
+                      </label>
+                      <input
+                        value={reservationData.customerName}
+                        onChange={(e) =>
+                          setReservationData({
+                            ...reservationData,
+                            customerName: e.target.value,
+                          })
+                        }
+                        className="w-full p-3 border border-gray-200 rounded-xl"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Customer Phone
+                      </label>
+                      <input
+                        value={reservationData.customerPhone}
+                        onChange={(e) =>
+                          setReservationData({
+                            ...reservationData,
+                            customerPhone: e.target.value,
+                          })
+                        }
+                        className="w-full p-3 border border-gray-200 rounded-xl"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Reserved Until
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={reservationData.reservedUntil}
+                        onChange={(e) =>
+                          setReservationData({
+                            ...reservationData,
+                            reservedUntil: e.target.value,
+                          })
+                        }
+                        className="w-full p-3 border border-gray-200 rounded-xl"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex space-x-3 pt-4">
+                      <button
+                        type="submit"
+                        className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 px-4 rounded-xl font-semibold transition-all shadow-md"
+                      >
+                        Create Reservation
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowReservationForm(false)}
+                        className="px-6 py-3 text-gray-600 hover:text-gray-900 font-semibold rounded-xl border border-gray-200 hover:border-gray-300 transition-all"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* Custom Clear Table Confirmation */}
-      {showClearConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full">
-            <div className="text-center mb-6">
-              <CheckCircle className="w-16 h-16 text-emerald-500 mx-auto mb-4" />
-              <h3 className="text-xl font-bold text-gray-900 mb-2">
-                Clear Table?
-              </h3>
-              <p className="text-gray-600">
-                Mark Table {showClearConfirm} as available (Payment completed)
-              </p>
-            </div>
-            <div className="flex space-x-3">
-              <button
-                onClick={confirmClearTable}
-                className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white py-3 px-4 rounded-xl font-semibold transition-all shadow-md"
-              >
-                Yes, Clear Table
-              </button>
-              <button
-                onClick={() => setShowClearConfirm(null)}
-                className="flex-1 py-3 px-4 text-gray-700 font-semibold rounded-xl border border-gray-200 hover:border-gray-300 transition-all"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Reservation Modal */}
-      {showReservationForm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-xl font-bold text-gray-900">
-                New Reservation
-              </h3>
-              <button
-                onClick={() => setShowReservationForm(false)}
-                className="text-gray-400 hover:text-gray-600 p-1 -m-1 rounded-lg hover:bg-gray-100"
-              >
-                <svg
-                  className="w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-            <form onSubmit={createReservation} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Table
-                </label>
-                <select
-                  value={reservationData.tableId}
-                  onChange={(e) =>
-                    setReservationData({
-                      ...reservationData,
-                      tableId: e.target.value,
-                    })
-                  }
-                  className="w-full p-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  required
-                >
-                  <option value="">Select available table</option>
-                  {tables
-                    .filter((t) => t.status === "available")
-                    .map((table) => (
-                      <option key={table.id} value={table.id}>
-                        Table {table.id}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Customer Name
-                </label>
-                <input
-                  type="text"
-                  value={reservationData.customerName}
-                  onChange={(e) =>
-                    setReservationData({
-                      ...reservationData,
-                      customerName: e.target.value,
-                    })
-                  }
-                  className="w-full p-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="John Doe"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Phone
-                </label>
-                <input
-                  type="tel"
-                  value={reservationData.customerPhone}
-                  onChange={(e) =>
-                    setReservationData({
-                      ...reservationData,
-                      customerPhone: e.target.value,
-                    })
-                  }
-                  className="w-full p-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="9876543210"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Until
-                </label>
-                <input
-                  type="time"
-                  value={reservationData.reservedUntil}
-                  onChange={(e) =>
-                    setReservationData({
-                      ...reservationData,
-                      reservedUntil: e.target.value,
-                    })
-                  }
-                  className="w-full p-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  required
-                />
-              </div>
-              <div className="flex space-x-3 pt-4">
-                <button
-                  type="submit"
-                  className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 px-4 rounded-xl font-semibold transition-all shadow-md"
-                >
-                  Create Reservation
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowReservationForm(false)}
-                  className="px-6 py-3 text-gray-600 hover:text-gray-900 font-semibold rounded-xl border border-gray-200 hover:border-gray-300 transition-all"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
