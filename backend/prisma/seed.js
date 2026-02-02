@@ -1,9 +1,12 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+
 const prisma = new PrismaClient();
 
 async function main() {
-    // Owner
+    console.log('🌱 Starting full seed...');
+
+    // 1. Owner
     await prisma.user.upsert({
         where: { email: 'owner@cafepos.com' },
         update: {},
@@ -13,8 +16,9 @@ async function main() {
             role: 'owner'
         }
     });
+    console.log('✅ Owner seeded');
 
-    // Categories
+    // 2. Categories
     const drinks = await prisma.category.upsert({
         where: { name: 'Drinks' },
         update: {},
@@ -26,44 +30,83 @@ async function main() {
         update: {},
         create: { name: 'Snacks' }
     });
+    console.log('✅ Categories seeded');
 
-    // Menu Items (create if not exists)
-    const espresso = await prisma.menuItem.create({
-        data: {
+    // 3. Menu Items
+    await prisma.menuItem.upsert({
+        where: { id: 1 },
+        update: {},
+        create: {
             name: 'Espresso',
             description: 'Strong coffee shot',
             price: 50.00,
-            categoryId: drinks.id
-        },
-        include: { category: true }
-    });
-
-    // Inventory
-    await prisma.inventory.upsert({
-        where: { menuItemId: espresso.id },
-        update: {},
-        create: {
-            menuItemId: espresso.id,
-            quantity: 25,
-            lowStock: false
+            categoryId: drinks.id,
+            isActive: true
         }
     });
 
-    await prisma.menuItem.create({
-        data: {
+    await prisma.menuItem.upsert({
+        where: { id: 2 },
+        update: {},
+        create: {
+            name: 'Latte',
+            description: 'Coffee with steamed milk',
+            price: 80.00,
+            categoryId: drinks.id,
+            isActive: true
+        }
+    });
+
+    await prisma.menuItem.upsert({
+        where: { id: 3 },
+        update: {},
+        create: {
             name: 'Chips',
             description: 'Salty snack',
             price: 30.00,
-            categoryId: snacks.id
+            categoryId: snacks.id,
+            isActive: true
         }
     });
+    console.log('✅ Menu items seeded');
 
-    console.log('✅ Seeded: Owner + Drinks/Snacks + Espresso (25 stock) + Chips');
+    // 4. Inventory
+    await prisma.inventory.upsert({
+        where: { menuItemId: 1 },
+        update: {},
+        create: { menuItemId: 1, quantity: 50, lowStock: false }
+    });
+    await prisma.inventory.upsert({
+        where: { menuItemId: 2 },
+        update: {},
+        create: { menuItemId: 2, quantity: 50, lowStock: false }
+    });
+    await prisma.inventory.upsert({
+        where: { menuItemId: 3 },
+        update: {},
+        create: { menuItemId: 3, quantity: 100, lowStock: false }
+    });
+    console.log('✅ Inventory seeded');
+
+    // 5. TABLES - FIXED FOR YOUR SCHEMA
+    await prisma.table.deleteMany(); // Clear existing
+
+    await prisma.table.createMany({
+        data: Array.from({ length: 10 }, (_, i) => ({
+            id: i + 1,
+            name: `Table ${i + 1}`,
+            status: 'AVAILABLE',
+            currentBill: 0
+        }))
+    });
+    console.log('✅ 10 Tables seeded (Table 1-10)');
+
+    console.log('🎉 FULL SEED COMPLETE!');
 }
 
 main()
-    .catch(e => {
-        console.error('Seed error:', e.message);
+    .catch((e) => {
+        console.error('❌ Seed ERROR:', e.message);
         process.exit(1);
     })
     .finally(async () => {

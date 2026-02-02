@@ -1,7 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const errorHandler = require('./src/middleware/errorHandler');
+
 dotenv.config();
+
 
 const app = express();
 
@@ -28,6 +31,13 @@ app.get('/api/protected', require('./src/middleware/auth'), (req, res) => {
 });
 
 app.use('/api/menu', require('./src/routes/menu'));
+app.use('/api/orders', require('./src/routes/order'));
+app.use('/api/reports', require('./src/routes/report'));
+app.use('/api/inventory', require('./src/routes/inventory'));
+app.use('/api/tables', require('./src/routes/tables'));
+
+
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {

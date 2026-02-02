@@ -16,29 +16,77 @@ model User {
 }
 
 model Category {
-  id        Int       @id @default(autoincrement())
-  name      String    @unique // Drinks, Snacks, Meals
-  createdAt DateTime  @default(now())
-  items     MenuItem[]
+  id        Int        @id @default(autoincrement())
+  name      String     @unique
+  menuItems MenuItem[]
+  createdAt DateTime   @default(now())
 }
 
 model MenuItem {
-  id          Int       @id @default(autoincrement())
+  id          Int         @id @default(autoincrement())
   name        String
   description String?
-  price       Decimal   @db.Decimal(10, 2)
+  price       Decimal     @db.Decimal(10, 2)
   categoryId  Int
-  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  isActive    Boolean     @default(true)
+  category    Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   inventory   Inventory?
-  createdAt   DateTime  @default(now())
+  orderItems  OrderItem[]
+  createdAt   DateTime    @default(now())
 }
 
 model Inventory {
   id         Int      @id @default(autoincrement())
   menuItemId Int      @unique
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
   quantity   Int      @default(0)
   lowStock   Boolean  @default(false)
-  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
   updatedAt  DateTime @updatedAt
+}
+
+model Order {
+  id          Int         @id @default(autoincrement())
+  tableId     Int
+  table       Table       @relation(fields: [tableId], references: [id])
+  billNumber  String      @unique
+  subtotal    Decimal     @db.Decimal(10, 2)
+  tax         Decimal     @db.Decimal(10, 2)
+  total       Decimal     @db.Decimal(10, 2)
+  status      String      @default("pending") // pending, preparing, served, paid, cancelled
+  paymentMode String?     // cash, card, upi
+  items       OrderItem[]
+  createdAt   DateTime    @default(now())
+  paidAt      DateTime?
+}
+
+model OrderItem {
+  id         Int      @id @default(autoincrement())
+  orderId    Int
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId Int
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+  quantity   Int
+  price      Decimal  @db.Decimal(10, 2)
+}
+
+
+model Table {
+  id            Int       @id @default(autoincrement())
+  name          String
+  status        TableStatus @default(AVAILABLE)
+  currentBill   Float?    @default(0)
+  orderTime     String?
+  customerName  String?
+  customerPhone String?
+  reservedUntil String?
+  updatedAt     DateTime  @updatedAt
+  orders        Order[]   @relation 
+  @@map("tables")
+}
+
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED  
+  RESERVED
 }
 
