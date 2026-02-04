@@ -4,38 +4,45 @@ const prisma = require('../prisma');
 exports.getInventory = async (req, res, next) => {
     try {
         const inventory = await prisma.inventory.findMany({
-            include: { menuItem: { include: { category: true } } }
+            include: {
+                menuItem: {
+                    include: {
+                        category: true
+                    }
+                }
+            },
+            orderBy: { updatedAt: 'desc' }
         });
+
         res.json(inventory);
     } catch (error) {
+        console.error('Get inventory error:', error);
         next(error);
     }
 };
 
+
 // Update stock quantity
-exports.updateStock = async (req, res, next) => {
+exports.updateInventory = async (req, res, next) => {
     try {
         const { id } = req.params;
         const { quantity } = req.body;
 
-        const parsedId = parseInt(id, 10);
-        const q = Number(quantity);
-
-        if (!Number.isFinite(parsedId) || !Number.isFinite(q) || q < 0) {
-            return res.status(400).json({ error: 'Invalid table id or quantity' });
-        }
-
         const inventory = await prisma.inventory.update({
-            where: { id: parsedId },
+            where: { id: parseInt(id, 10) },
             data: {
-                quantity: Math.floor(q),
-                lowStock: Math.floor(q) < 10 // Auto-detect low stock
+                quantity: parseInt(quantity, 10),
+                lowStock: quantity < 10,
+                updatedAt: new Date()
             },
-            include: { menuItem: true }
+            include: {
+                menuItem: true
+            }
         });
 
-        res.json(inventory);
+        res.json({ success: true, inventory });
     } catch (error) {
+        console.error('Update inventory error:', error);
         next(error);
     }
 };

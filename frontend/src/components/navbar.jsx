@@ -6,7 +6,8 @@ import {
   ShoppingCart,
   Menu,
   Home,
-  Package, // Added Package icon for Orders
+  Package,
+  Beaker,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
@@ -57,6 +58,18 @@ const Navbar = () => {
             >
               <Menu className="w-4 h-4" />
               <span className="hidden md:inline">Menu</span>
+            </Link>
+
+            <Link
+              to="/inventory"
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center space-x-2 ${
+                isActive("/inventory")
+                  ? "bg-red-50 text-red-600"
+                  : "text-gray-700 hover:text-gray-900 hover:bg-gray-100"
+              }`}
+            >
+              <Beaker className="w-4 h-4" />
+              <span className="hidden md:inline">Inventory</span>
             </Link>
 
             <Link

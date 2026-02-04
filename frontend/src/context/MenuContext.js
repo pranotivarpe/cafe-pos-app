@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 
 const MenuContext = createContext();
@@ -13,14 +13,32 @@ export const MenuProvider = ({ children }) => {
     const [menuItems, setMenuItems] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        fetchMenu();
+    // Memoize api instance so it doesn't change on every render
+    const api = useMemo(() => {
+        const instance = axios.create({
+            baseURL: 'http://localhost:5001/api',
+        });
+
+        instance.interceptors.request.use(
+            (config) => {
+                const token = localStorage.getItem('token');
+                if (token) {
+                    config.headers.Authorization = `Bearer ${token}`;
+                }
+                return config;
+            },
+            (error) => {
+                return Promise.reject(error);
+            }
+        );
+
+        return instance;
     }, []);
 
-    const fetchMenu = async () => {
+    const fetchMenu = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await axios.get('/api/menu/items');
+            const res = await api.get('/menu/items');
             setMenuItems(res.data || []);
         } catch (err) {
             console.error('Failed to fetch menu:', err);
@@ -28,30 +46,34 @@ export const MenuProvider = ({ children }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [api]);
 
-    const addItem = async (item) => {
-        const res = await axios.post('/api/menu/items', item);
+    useEffect(() => {
+        fetchMenu();
+    }, [fetchMenu]);
+
+    const addItem = useCallback(async (item) => {
+        const res = await api.post('/menu/items', item);
         setMenuItems((prev) => [...prev, res.data]);
         return res.data;
-    };
+    }, [api]);
 
-    const updateItem = async (id, data) => {
-        const res = await axios.put(`/api/menu/items/${id}`, data);
+    const updateItem = useCallback(async (id, data) => {
+        const res = await api.put(`/menu/items/${id}`, data);
         setMenuItems((prev) => prev.map((m) => (m.id === id ? res.data : m)));
         return res.data;
-    };
+    }, [api]);
 
-    const deleteItem = async (id) => {
-        await axios.delete(`/api/menu/items/${id}`);
+    const deleteItem = useCallback(async (id) => {
+        await api.delete(`/menu/items/${id}`);
         setMenuItems((prev) => prev.filter((m) => m.id !== id));
-    };
+    }, [api]);
 
     return (
         <MenuContext.Provider
             value={{
                 menuItems,
-                setMenuItems, // exported so consumers like MenuPage can update directly when needed
+                setMenuItems,
                 loading,
                 fetchMenu,
                 addItem,

@@ -2,9 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const errorHandler = require('./src/middleware/errorHandler');
+const { startReservationScheduler } = require('./src/utils/scheduler');
 
 dotenv.config();
-
 
 const app = express();
 
@@ -35,11 +35,14 @@ app.use('/api/orders', require('./src/routes/order'));
 app.use('/api/reports', require('./src/routes/report'));
 app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/tables', require('./src/routes/tables'));
-
+app.use('/api/ingredients', require('./src/routes/ingredients'));
 
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
     console.log(`🚀 Server on http://localhost:${PORT}`);
+
+    // Start the reservation scheduler
+    startReservationScheduler(1);
 });

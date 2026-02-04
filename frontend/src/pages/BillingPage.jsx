@@ -1,7 +1,8 @@
 import axios from "axios";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useMenu } from "../context/MenuContext";
-import { useAuth } from "../context/AuthContext";
+// Remove or comment out useAuth if user is not used
+// import { useAuth } from "../context/AuthContext";
 import {
   ShoppingCart,
   Trash2,
@@ -15,7 +16,8 @@ import Navbar from "../components/navbar";
 
 const BillingPage = () => {
   const { menuItems } = useMenu();
-  const { user } = useAuth();
+  // Remove this line since user is not used:
+  // const { user } = useAuth();
   const [tables, setTables] = useState([]);
   const [cart, setCart] = useState([]);
   const [tableId, setTableId] = useState(null);
@@ -26,27 +28,19 @@ const BillingPage = () => {
   // normalize status for comparisons
   const getStatus = (s) => String(s || "").toLowerCase();
 
-  // Safe label for a table (prefer number, fallback to name, fallback id)
+  // Safe label for a table
   const getTableLabel = (t) => {
     if (!t) return "";
     if (typeof t.number !== "undefined" && t.number !== null) return t.number;
     if (typeof t.name === "string" && t.name.trim() !== "") return t.name;
-    // Some backends might use 'label' or 'tableNumber' — try common aliases
     if (typeof t.tableNumber !== "undefined" && t.tableNumber !== null)
       return t.tableNumber;
     if (typeof t.label === "string" && t.label.trim() !== "") return t.label;
     return `#${t.id}`;
   };
 
-  // Fetch tables on mount
-  useEffect(() => {
-    fetchTables();
-    const interval = setInterval(fetchTables, 30000); // 30s refresh
-    return () => clearInterval(interval);
-  }, []);
-
-  // Robust fetch: try primary endpoint, fallback to alternative. Use allSettled for diagnostics.
-  const fetchTables = async () => {
+  // Wrap fetchTables in useCallback
+  const fetchTables = useCallback(async () => {
     try {
       const results = await Promise.allSettled([
         axios.get("/api/orders/tables"),
@@ -78,7 +72,24 @@ const BillingPage = () => {
       setTables([]);
       setTableId(null);
     }
-  };
+  }, []);
+
+  // Fetch tables on mount
+  useEffect(() => {
+    fetchTables();
+    const interval = setInterval(fetchTables, 30000);
+    const handleOrderUpdated = () => {
+      fetchTables();
+    };
+    window.addEventListener("order-updated", handleOrderUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("order-updated", handleOrderUpdated);
+    };
+  }, [fetchTables]);
+
+  // ...rest of the component remains the same
 
   const addToCart = (item) => {
     if (!item.inventory || item.inventory.quantity <= 0) {
@@ -189,7 +200,9 @@ const BillingPage = () => {
       });
 
       alert(
-        `✅ Order ${billNumber} sent to kitchen for Table ${getTableLabel}`,
+        `✅ Order ${billNumber} sent to kitchen for Table ${getTableLabel(
+          table,
+        )}`,
       );
 
       setCart([]);

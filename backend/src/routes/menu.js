@@ -1,21 +1,14 @@
 const express = require('express');
-const auth = require('../middleware/auth');
-const {
-    getMenu,
-    addItem,
-    updateItem,
-    deleteItem,
-    getCategories
-} = require('../controllers/menuController');
-
 const router = express.Router();
+const menuController = require('../controllers/menuController');
+const auth = require('../middleware/auth');
 
-router.use(auth); // All protected
 
-router.get('/items', getMenu);
-router.post('/items', addItem);
-router.put('/items/:id', updateItem);
-router.delete('/items/:id', deleteItem);
-router.get('/categories', getCategories);
+// All menu routes require authentication
+router.get('/items', auth, menuController.getMenuItems);
+router.get('/categories', auth, menuController.getCategories);
+router.post('/items', auth, menuController.createMenuItem);
+router.put('/items/:id', auth, menuController.updateMenuItem);
+router.delete('/items/:id', auth, menuController.deleteMenuItem);
 
 module.exports = router;

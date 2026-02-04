@@ -8,6 +8,7 @@ import MenuPage from './pages/MenuPage';
 import BillingPage from './pages/BillingPage';
 import ReportsPage from './pages/ReportsPage';
 import OrdersPage from "./pages/OrdersPage";
+import InventoryPage from "./pages/InventoryPage";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -18,7 +19,7 @@ const ProtectedRoute = ({ children }) => {
 function AppContent() {
   return (
     <Router>
-      <MenuProvider>  {/* Wrap for menu state */}
+      <MenuProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/dashboard" element={
@@ -39,6 +40,11 @@ function AppContent() {
             </ProtectedRoute>
           } />
           <Route path="/orders" element={<ProtectedRoute><OrdersPage /></ProtectedRoute>} />
+          <Route path="/inventory" element={
+            <ProtectedRoute>
+              <InventoryPage />
+            </ProtectedRoute>
+          } />
         </Routes>
       </MenuProvider>
     </Router>
@@ -54,3 +60,6 @@ function App() {
 }
 
 export default App;
+
+
+

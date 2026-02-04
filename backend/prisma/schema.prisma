@@ -7,6 +7,25 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum OrderStatus {
+  PENDING
+  PREPARING
+  SERVED
+  PAID
+  CANCELLED
+}
+
+enum IngredientUnit {
+  GRAMS
+  KG
+  ML
+  LITERS
+  PIECES
+  CUPS
+  TABLESPOONS
+  TEASPOONS
+}
+
 model User {
   id        Int      @id @default(autoincrement())
   email     String   @unique
@@ -24,13 +43,14 @@ model Category {
 
 model MenuItem {
   id          Int         @id @default(autoincrement())
-  name        String
+  name        String      
   description String?
   price       Decimal     @db.Decimal(10, 2)
   categoryId  Int
   isActive    Boolean     @default(true)
   category    Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   inventory   Inventory?
+  ingredients MenuItemIngredient[]
   orderItems  OrderItem[]
   createdAt   DateTime    @default(now())
 }
@@ -44,6 +64,42 @@ model Inventory {
   updatedAt  DateTime @updatedAt
 }
 
+model Ingredient {
+  id            Int                  @id @default(autoincrement())
+  name          String               @unique
+  unit          IngredientUnit       @default(GRAMS)
+  currentStock  Float                @default(0)
+  minStock      Float                @default(10)  // Alert threshold
+  costPerUnit   Decimal              @db.Decimal(10, 2) @default(0)
+  supplier      String?
+  menuItems     MenuItemIngredient[]
+  stockLogs     IngredientStockLog[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+}
+
+model MenuItemIngredient {
+  id           Int        @id @default(autoincrement())
+  menuItemId   Int
+  ingredientId Int
+  quantity     Float      // Amount of ingredient needed for 1 unit of menu item
+  menuItem     MenuItem   @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  
+  @@unique([menuItemId, ingredientId])
+}
+
+model IngredientStockLog {
+  id           Int        @id @default(autoincrement())
+  ingredientId Int
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  changeType   String     // PURCHASE, ORDER_USAGE, WASTAGE, ADJUSTMENT
+  quantity     Float      // Positive for additions, negative for deductions
+  notes        String?
+  orderId      Int?       // Link to order if usage
+  createdAt    DateTime   @default(now())
+}
+
 model Order {
   id          Int         @id @default(autoincrement())
   tableId     Int
@@ -52,11 +108,12 @@ model Order {
   subtotal    Decimal     @db.Decimal(10, 2)
   tax         Decimal     @db.Decimal(10, 2)
   total       Decimal     @db.Decimal(10, 2)
-  status      String      @default("pending") // pending, preparing, served, paid, cancelled
+  status      OrderStatus      @default(PENDING) // pending, preparing, served, paid, cancelled
   paymentMode String?     // cash, card, upi
   items       OrderItem[]
   createdAt   DateTime    @default(now())
   paidAt      DateTime?
+  updatedAt   DateTime    @updatedAt
 }
 
 model OrderItem {
@@ -72,7 +129,9 @@ model OrderItem {
 
 model Table {
   id            Int        @id @default(autoincrement())
-  name          String
+  number        Int         @unique 
+  name          String 
+  capacity      Int         @default(4)
   status        TableStatus @default(AVAILABLE)
   currentBill   Float?     @default(0)
   orderTime     DateTime?               // changed from String? to DateTime?
@@ -80,6 +139,7 @@ model Table {
   customerPhone String?
   reservedFrom  DateTime?               // NEW: reservation start
   reservedUntil DateTime?               // changed to DateTime?
+  createdAt     DateTime    @default(now())
   updatedAt     DateTime   @updatedAt
   orders        Order[]   @relation 
   @@map("tables")

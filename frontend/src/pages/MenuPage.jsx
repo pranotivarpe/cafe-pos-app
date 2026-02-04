@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useMenu } from "../context/MenuContext";
 import {
   Plus,
@@ -10,18 +10,32 @@ import {
   Save,
   Package,
   AlertCircle,
+  ToggleLeft,
+  ToggleRight,
+  RefreshCw,
+  PackagePlus,
 } from "lucide-react";
 import Navbar from "../components/navbar";
 import axios from "axios";
 
 const MenuPage = () => {
-  const { menuItems, loading, setMenuItems } = useMenu(); // Add setMenuItems to context
+  const {
+    menuItems,
+    loading,
+    fetchMenu,
+    addItem,
+    updateItem,
+    deleteItem,
+  } = useMenu();
   const [showForm, setShowForm] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [categories, setCategories] = useState([]);
+  const [showStockModal, setShowStockModal] = useState(false);
+  const [stockItem, setStockItem] = useState(null);
+  const [newStockQty, setNewStockQty] = useState(0);
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -29,54 +43,45 @@ const MenuPage = () => {
     categoryId: 1,
   });
 
-  // Fetch categories on mount
-  useEffect(() => {
-    fetchCategories();
-  }, []);
-
-  const fetchCategories = async () => {
+  // Wrapped fetchCategories
+  const fetchCategories = useCallback(async () => {
     try {
       const res = await axios.get("/api/menu/categories");
       setCategories(res.data);
+      if (res.data.length > 0) {
+        setForm((prev) => ({
+          ...prev,
+          categoryId: prev.categoryId || res.data[0].id,
+        }));
+      }
     } catch (err) {
       console.error("Failed to fetch categories:", err);
     }
-  };
+  }, []);
+
+  // Fetch categories on mount
+  useEffect(() => {
+    fetchCategories();
+  }, [fetchCategories]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      const itemData = {
+        name: form.name,
+        description: form.description,
+        price: parseFloat(form.price),
+        categoryId: parseInt(form.categoryId),
+      };
+
       if (editMode) {
-        // UPDATE existing item
-        const res = await axios.put(`/api/menu/items/${editingId}`, {
-          name: form.name,
-          description: form.description,
-          price: parseFloat(form.price),
-          categoryId: parseInt(form.categoryId),
-        });
-
-        // Update local state
-        setMenuItems(
-          menuItems.map((item) => (item.id === editingId ? res.data : item)),
-        );
-
+        await updateItem(editingId, itemData);
         alert("✅ Item updated successfully!");
       } else {
-        // CREATE new item
-        const res = await axios.post("/api/menu/items", {
-          name: form.name,
-          description: form.description,
-          price: parseFloat(form.price),
-          categoryId: parseInt(form.categoryId),
-        });
-
-        // Add to local state
-        setMenuItems([...menuItems, res.data]);
-
+        await addItem(itemData);
         alert("✅ Item added successfully!");
       }
 
-      // Reset form
       cancelForm();
     } catch (err) {
       alert("❌ Failed: " + (err.response?.data?.error || err.message));
@@ -95,20 +100,52 @@ const MenuPage = () => {
     setShowForm(true);
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this item?")) {
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`Are you sure you want to delete "${name}"?`)) {
       return;
     }
 
     try {
-      await axios.delete(`/api/menu/items/${id}`);
-
-      // Remove from local state
-      setMenuItems(menuItems.filter((item) => item.id !== id));
-
+      await deleteItem(id);
       alert("✅ Item deleted successfully!");
     } catch (err) {
       alert("❌ Delete failed: " + (err.response?.data?.error || err.message));
+    }
+  };
+
+  const handleToggleActive = async (item) => {
+    try {
+      await updateItem(item.id, { isActive: !item.isActive });
+    } catch (err) {
+      alert("❌ Failed to update item status");
+    }
+  };
+
+  const openStockModal = (item) => {
+    setStockItem(item);
+    setNewStockQty(item.inventory?.quantity || 0);
+    setShowStockModal(true);
+  };
+
+  const updateStock = async () => {
+    if (!stockItem?.inventory?.id) {
+      alert("❌ No inventory record found for this item");
+      return;
+    }
+
+    try {
+      await axios.put(`/api/inventory/${stockItem.inventory.id}`, {
+        quantity: parseInt(newStockQty),
+      });
+      alert("✅ Stock updated successfully!");
+      setShowStockModal(false);
+      setStockItem(null);
+      fetchMenu(); // Refresh menu to get updated stock
+    } catch (err) {
+      alert(
+        "❌ Failed to update stock: " +
+          (err.response?.data?.error || err.message),
+      );
     }
   };
 
@@ -135,12 +172,16 @@ const MenuPage = () => {
     return matchesSearch && matchesCategory;
   });
 
+  // Separate active and inactive items
+  const activeItems = filteredItems.filter((item) => item.isActive !== false);
+  const inactiveItems = filteredItems.filter((item) => item.isActive === false);
+
   if (loading)
     return (
       <div className="min-h-screen bg-gray-50">
         <Navbar />
         <div className="flex justify-center items-center p-16">
-          <div className="text-gray-500">Loading menu...</div>
+          <div className="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin"></div>
         </div>
       </div>
     );
@@ -158,24 +199,34 @@ const MenuPage = () => {
                 Menu Management
               </h1>
               <p className="text-sm text-gray-500 mt-1">
-                {menuItems.length} items • {categories.length} categories
+                {activeItems.length} active items • {inactiveItems.length}{" "}
+                inactive • {categories.length} categories
               </p>
             </div>
-            <button
-              onClick={() => setShowForm(!showForm)}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all ${
-                showForm
-                  ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                  : "bg-gradient-to-r from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700"
-              }`}
-            >
-              {showForm ? (
-                <X className="w-5 h-5" />
-              ) : (
-                <Plus className="w-5 h-5" />
-              )}
-              <span>{showForm ? "Cancel" : "Add Item"}</span>
-            </button>
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={fetchMenu}
+                className="p-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl transition-all"
+                title="Refresh"
+              >
+                <RefreshCw className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setShowForm(!showForm)}
+                className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all ${
+                  showForm
+                    ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    : "bg-gradient-to-r from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700"
+                }`}
+              >
+                {showForm ? (
+                  <X className="w-5 h-5" />
+                ) : (
+                  <Plus className="w-5 h-5" />
+                )}
+                <span>{showForm ? "Cancel" : "Add Item"}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -290,8 +341,8 @@ const MenuPage = () => {
                 className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-red-300 focus:outline-none text-sm"
               />
             </div>
-            <div className="flex items-center space-x-2">
-              <Filter className="w-5 h-5 text-gray-400" />
+            <div className="flex items-center space-x-2 overflow-x-auto">
+              <Filter className="w-5 h-5 text-gray-400 flex-shrink-0" />
               {allCategories.map((cat) => (
                 <button
                   key={cat}
@@ -324,8 +375,11 @@ const MenuPage = () => {
                   <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
                     Price
                   </th>
-                  <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-center text-xs font-bold text-gray-700 uppercase tracking-wider">
                     Stock
+                  </th>
+                  <th className="px-6 py-4 text-center text-xs font-bold text-gray-700 uppercase tracking-wider">
+                    Status
                   </th>
                   <th className="px-6 py-4 text-center text-xs font-bold text-gray-700 uppercase tracking-wider">
                     Actions
@@ -336,7 +390,9 @@ const MenuPage = () => {
                 {filteredItems.map((item) => (
                   <tr
                     key={item.id}
-                    className="hover:bg-gray-50 transition-colors"
+                    className={`hover:bg-gray-50 transition-colors ${
+                      item.isActive === false ? "opacity-60 bg-gray-50" : ""
+                    }`}
                   >
                     <td className="px-6 py-4">
                       <div>
@@ -357,24 +413,48 @@ const MenuPage = () => {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <span className="text-lg font-bold text-red-600">
-                        ₹{item.price}
+                        ₹{parseFloat(item.price).toFixed(2)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end space-x-2">
+                    <td className="px-6 py-4">
+                      <button
+                        onClick={() => openStockModal(item)}
+                        className="flex items-center justify-center space-x-2 mx-auto px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+                        title="Click to update stock"
+                      >
                         {item.inventory?.lowStock && (
                           <AlertCircle className="w-4 h-4 text-orange-500" />
                         )}
                         <span
                           className={`font-semibold ${
-                            item.inventory?.lowStock
+                            item.inventory?.quantity === 0
+                              ? "text-red-600"
+                              : item.inventory?.lowStock
                               ? "text-orange-600"
                               : "text-green-600"
                           }`}
                         >
-                          {item.inventory?.quantity || 0}
+                          {item.inventory?.quantity ?? 0}
                         </span>
-                      </div>
+                        <PackagePlus className="w-4 h-4 text-gray-400" />
+                      </button>
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        onClick={() => handleToggleActive(item)}
+                        className="flex items-center justify-center mx-auto"
+                        title={
+                          item.isActive !== false
+                            ? "Click to deactivate"
+                            : "Click to activate"
+                        }
+                      >
+                        {item.isActive !== false ? (
+                          <ToggleRight className="w-8 h-8 text-green-500" />
+                        ) : (
+                          <ToggleLeft className="w-8 h-8 text-gray-400" />
+                        )}
+                      </button>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-center space-x-2">
@@ -386,7 +466,7 @@ const MenuPage = () => {
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleDelete(item.id)}
+                          onClick={() => handleDelete(item.id, item.name)}
                           className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                           title="Delete"
                         >
@@ -413,6 +493,72 @@ const MenuPage = () => {
           )}
         </div>
       </div>
+
+      {/* Stock Update Modal */}
+      {showStockModal && stockItem && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-gray-900">Update Stock</h3>
+              <button
+                onClick={() => {
+                  setShowStockModal(false);
+                  setStockItem(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <p className="text-lg font-semibold text-gray-900">
+                {stockItem.name}
+              </p>
+              <p className="text-sm text-gray-500">
+                {stockItem.category?.name}
+              </p>
+              <p className="text-sm text-gray-500 mt-2">
+                Current stock:{" "}
+                <span className="font-semibold">
+                  {stockItem.inventory?.quantity ?? 0}
+                </span>
+              </p>
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                New Quantity
+              </label>
+              <input
+                type="number"
+                value={newStockQty}
+                onChange={(e) => setNewStockQty(e.target.value)}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-red-300 focus:outline-none text-lg font-semibold text-center"
+                min="0"
+              />
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={updateStock}
+                className="flex-1 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white py-3 rounded-xl font-semibold transition-all"
+              >
+                Update Stock
+              </button>
+              <button
+                onClick={() => {
+                  setShowStockModal(false);
+                  setStockItem(null);
+                }}
+                className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-semibold transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -60,7 +60,9 @@ const OrdersPage = () => {
 
     // Filter by status
     if (selectedStatus !== "all") {
-      filtered = filtered.filter((order) => order.status === selectedStatus);
+      filtered = filtered.filter(
+        (order) => order.status?.toLowerCase() === selectedStatus.toLowerCase(),
+      );
     }
 
     // Filter by search (bill number or table)
@@ -77,11 +79,13 @@ const OrdersPage = () => {
 
   const updateOrderStatus = async (orderId, newStatus) => {
     try {
-      await axios.put(`/api/orders/${orderId}/status`, { status: newStatus });
-      alert(`✅ Order status updated to ${newStatus}`);
+      await axios.put(`/api/orders/${orderId}/status`, {
+        status: newStatus.toUpperCase(),
+      });
+      alert(`✅ Order status updated to ${newStatus.toUpperCase()}`);
       fetchOrders();
       if (selectedOrder?.id === orderId) {
-        setSelectedOrder({ ...selectedOrder, status: newStatus });
+        setSelectedOrder({ ...selectedOrder, status: newStatus.toUpperCase() });
       }
     } catch (err) {
       alert("❌ Failed to update order status");
@@ -242,8 +246,11 @@ const OrdersPage = () => {
     printWindow.document.close();
   };
 
+  // Helper to normalize status for comparisons
+  const getStatusLower = (status) => String(status || "").toLowerCase();
+
   const getStatusColor = (status) => {
-    switch (status) {
+    switch (getStatusLower(status)) {
       case "paid":
         return "bg-green-100 text-green-700 border-green-300";
       case "pending":
@@ -260,7 +267,7 @@ const OrdersPage = () => {
   };
 
   const getStatusIcon = (status) => {
-    switch (status) {
+    switch (getStatusLower(status)) {
       case "paid":
         return <CheckCircle className="w-4 h-4" />;
       case "pending":
@@ -294,27 +301,30 @@ const OrdersPage = () => {
     {
       value: "pending",
       label: "Pending",
-      count: orders.filter((o) => o.status === "pending").length,
+      count: orders.filter((o) => getStatusLower(o.status) === "pending")
+        .length,
     },
     {
       value: "preparing",
       label: "Preparing",
-      count: orders.filter((o) => o.status === "preparing").length,
+      count: orders.filter((o) => getStatusLower(o.status) === "preparing")
+        .length,
     },
     {
       value: "served",
       label: "Served",
-      count: orders.filter((o) => o.status === "served").length,
+      count: orders.filter((o) => getStatusLower(o.status) === "served").length,
     },
     {
       value: "paid",
       label: "Paid",
-      count: orders.filter((o) => o.status === "paid").length,
+      count: orders.filter((o) => getStatusLower(o.status) === "paid").length,
     },
     {
       value: "cancelled",
       label: "Cancelled",
-      count: orders.filter((o) => o.status === "cancelled").length,
+      count: orders.filter((o) => getStatusLower(o.status) === "cancelled")
+        .length,
     },
   ];
 
@@ -523,60 +533,63 @@ const OrdersPage = () => {
                 </div>
 
                 {/* Status Update Buttons */}
-                {order.status !== "cancelled" && (
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <p className="text-xs text-gray-500 mb-2 font-medium">
-                      Update Status:
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {order.status === "pending" && (
-                        <button
-                          onClick={() =>
-                            updateOrderStatus(order.id, "preparing")
-                          }
-                          className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-medium transition-colors"
-                        >
-                          🔥 Start Preparing
-                        </button>
-                      )}
-
-                      {order.status === "preparing" && (
-                        <button
-                          onClick={() => updateOrderStatus(order.id, "served")}
-                          className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-xs font-medium transition-colors"
-                        >
-                          ✅ Mark as Served
-                        </button>
-                      )}
-
-                      {order.status === "served" && (
-                        <button
-                          onClick={() => handlePayment(order)}
-                          className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-xs font-medium transition-colors"
-                        >
-                          💳 Collect Payment
-                        </button>
-                      )}
-
-                      {order.status !== "paid" && (
-                        <button
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                `Cancel order ${order.billNumber}?`,
-                              )
-                            ) {
-                              updateOrderStatus(order.id, "cancelled");
+                {getStatusLower(order.status) !== "cancelled" &&
+                  getStatusLower(order.status) !== "paid" && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <p className="text-xs text-gray-500 mb-2 font-medium">
+                        Update Status:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {getStatusLower(order.status) === "pending" && (
+                          <button
+                            onClick={() =>
+                              updateOrderStatus(order.id, "preparing")
                             }
-                          }}
-                          className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-medium transition-colors"
-                        >
-                          ❌ Cancel
-                        </button>
-                      )}
+                            className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-medium transition-colors"
+                          >
+                            🔥 Start Preparing
+                          </button>
+                        )}
+
+                        {getStatusLower(order.status) === "preparing" && (
+                          <button
+                            onClick={() =>
+                              updateOrderStatus(order.id, "served")
+                            }
+                            className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-xs font-medium transition-colors"
+                          >
+                            ✅ Mark as Served
+                          </button>
+                        )}
+
+                        {getStatusLower(order.status) === "served" && (
+                          <button
+                            onClick={() => handlePayment(order)}
+                            className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-xs font-medium transition-colors"
+                          >
+                            💳 Collect Payment
+                          </button>
+                        )}
+
+                        {order.status !== "paid" && (
+                          <button
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Cancel order ${order.billNumber}?`,
+                                )
+                              ) {
+                                updateOrderStatus(order.id, "cancelled");
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-medium transition-colors"
+                          >
+                            ❌ Cancel
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
               </div>
             ))}
           </div>

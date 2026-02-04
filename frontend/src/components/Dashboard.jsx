@@ -78,41 +78,35 @@ const Dashboard = () => {
       const results = await Promise.allSettled([
         axios.get("/api/reports/stats"),
         axios.get("/api/tables"),
-        axios.get("/api/reports/recent-orders?limit=5"),
       ]);
 
-      const [statsRes, tablesRes, ordersRes] = results;
+      const [statsRes, tablesRes] = results;
 
       if (tablesRes.status === "fulfilled") {
         setTables(tablesRes.value.data || []);
         console.log("🪑 RAW TABLES API:", tablesRes.value.data);
       } else {
         console.warn("Tables fetch failed:", tablesRes.reason);
-        setTables([]); // fallback
+        setTables([]);
       }
 
       if (statsRes.status === "fulfilled") {
-        setStats(statsRes.value.data || {});
-        console.log("📊 STATS API:", statsRes.value.data);
+        const statsData = statsRes.value.data || {};
+        setStats(statsData);
+        // Use recentOrders from the stats response
+        setRecentOrders((statsData.recentOrders || []).slice(0, 5));
+        console.log("📊 STATS API:", statsData);
       } else {
         console.warn("Stats fetch failed:", statsRes.reason);
-        // keep existing stats or set defaults
         setStats({
           todaySales: 0,
           todayOrders: 0,
           lowStockCount: 0,
           totalItemsSold: 0,
         });
-      }
-
-      if (ordersRes.status === "fulfilled") {
-        setRecentOrders((ordersRes.value.data || []).slice(0, 5));
-      } else {
-        console.warn("Recent orders fetch failed:", ordersRes.reason);
         setRecentOrders([]);
       }
     } catch (err) {
-      // should not reach here with allSettled, but keep for safety
       console.error("Unexpected error fetching dashboard data:", err);
       setTables([]);
       setRecentOrders([]);
@@ -132,7 +126,16 @@ const Dashboard = () => {
   useEffect(() => {
     fetchDashboardData();
     const interval = setInterval(fetchDashboardData, 30000);
-    return () => clearInterval(interval);
+    const handleOrderUpdated = () => {
+      fetchDashboardData();
+    };
+
+    window.addEventListener("order-updated", handleOrderUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("order-updated", handleOrderUpdated);
+    };
   }, [fetchDashboardData]);
 
   // Filter tables according to selectedSection
@@ -147,15 +150,12 @@ const Dashboard = () => {
     return true;
   });
 
-  // Quick action: clear table (mark as available) — basic implementation
+  // Quick action: clear table (mark as available)
   const requestClearTable = async (tableId) => {
     try {
-      // endpoint assumed: PUT /api/orders/tables/:id/status or a custom endpoint
-      // adjust to your API; here we call orders route provided in repo: /api/orders/tables/:id/status
       await axios.put(`/api/orders/tables/${tableId}/status`, {
         status: "AVAILABLE",
       });
-      // refresh
       fetchDashboardData();
     } catch (err) {
       console.error("Failed to clear table:", err);
@@ -191,7 +191,6 @@ const Dashboard = () => {
     }
 
     try {
-      // Send both start and end to backend
       await axios.post("/api/tables/reserve", {
         tableId,
         customerName,
@@ -228,11 +227,31 @@ const Dashboard = () => {
     );
   }
 
-  // Table occupancy percentage (safe guards)
+  // Table occupancy percentage
   const totalTables = tables.length || 1;
   const occupiedCount = tables.filter((t) => getStatus(t.status) === "occupied")
     .length;
   const occupancyPct = Math.round((occupiedCount / totalTables) * 100);
+
+  // Format time remaining for reservation
+  const getTimeRemaining = (reservedUntil) => {
+    if (!reservedUntil) return null;
+
+    const now = new Date();
+    const until = new Date(reservedUntil);
+    const diff = until.getTime() - now.getTime();
+
+    if (diff <= 0) return "Expired";
+
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+
+    if (hours > 0) {
+      return `${hours}h ${remainingMinutes}m left`;
+    }
+    return `${minutes}m left`;
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -387,8 +406,18 @@ const Dashboard = () => {
                         {table.customerName}
                       </p>
                       <p className="text-xs text-yellow-600">
-                        Until {table.reservedUntil}
+                        {getTimeRemaining(table.reservedUntil)}
                       </p>
+                      {table.reservationStatus === "expiring_soon" && (
+                        <p className="text-xs text-orange-600 font-semibold animate-pulse">
+                          ⚠️ Expiring soon!
+                        </p>
+                      )}
+                      {table.reservationStatus === "expired" && (
+                        <p className="text-xs text-red-600 font-semibold">
+                          ❌ Expired
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -419,7 +448,7 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Sidebar - Recent Orders + Quick Stats + Reservation Form */}
+        {/* Sidebar */}
         <div className="lg:col-span-1 space-y-6">
           {/* Recent Orders */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
@@ -436,14 +465,14 @@ const Dashboard = () => {
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-bold text-gray-900">
-                        {order.id}
+                        {order.billNumber || order.id}
                       </span>
                       <span className="text-xs px-2 py-1 rounded-full font-medium text-white bg-green-500">
                         {order.status}
                       </span>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Table {order.tableId} •{" "}
+                      Table {order.table?.number || order.tableId} •{" "}
                       {new Date(order.createdAt).toLocaleString()}
                     </p>
                   </div>
@@ -570,6 +599,24 @@ const Dashboard = () => {
                           })
                         }
                         className="w-full p-3 border border-gray-200 rounded-xl"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Reserved From
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={reservationData.reservedFrom}
+                        onChange={(e) =>
+                          setReservationData({
+                            ...reservationData,
+                            reservedFrom: e.target.value,
+                          })
+                        }
+                        className="w-full p-3 border border-gray-200 rounded-xl"
+                        required
                       />
                     </div>
 

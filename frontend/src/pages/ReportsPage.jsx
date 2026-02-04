@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import axios from "axios";
 import jsPDF from "jspdf";
 import {
@@ -12,6 +12,11 @@ import {
   Package,
   TrendingDown,
   RefreshCw,
+  CreditCard,
+  Banknote,
+  Smartphone,
+  Clock,
+  Users,
 } from "lucide-react";
 import {
   BarChart,
@@ -23,6 +28,9 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
 import Navbar from "../components/navbar";
 
@@ -36,62 +44,81 @@ const ReportsPage = () => {
     lowStockItems: [],
     salesByCategory: [],
     recentOrders: [],
+    salesGrowth: 0,
+    ordersGrowth: 0,
+    itemsGrowth: 0,
+    avgOrderValue: 0,
+    paymentBreakdown: { cash: 0, card: 0, upi: 0 },
+    peakHours: [],
+    tableUtilization: 0,
   });
+
   const [dateRange, setDateRange] = useState({
-    from: "2026-01-01",
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0],
     to: new Date().toISOString().split("T")[0],
   });
+
   const [loading, setLoading] = useState(false);
   const [salesTrend, setSalesTrend] = useState([]);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    fetchStats();
-    fetchSalesTrend();
+  // Memoize api instance
+  const api = useMemo(() => {
+    const instance = axios.create({
+      baseURL: "http://localhost:5001/api",
+    });
+
+    instance.interceptors.request.use(
+      (config) => {
+        const token = localStorage.getItem("token");
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+        return config;
+      },
+      (error) => {
+        return Promise.reject(error);
+      },
+    );
+
+    return instance;
   }, []);
 
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await axios.get("/api/reports/stats");
+      const res = await api.get("/reports/stats");
       setStats(res.data);
     } catch (err) {
       console.error("Failed to fetch stats:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [api]);
 
-  const fetchSalesTrend = async () => {
+  const fetchSalesTrend = useCallback(async () => {
     try {
-      const res = await axios.get(
-        `/api/reports/sales?from=${dateRange.from}&to=${dateRange.to}`,
+      const res = await api.get(
+        `/reports/sales?from=${dateRange.from}&to=${dateRange.to}`,
       );
       if (res.data && Array.isArray(res.data)) {
         setSalesTrend(res.data);
-      } else {
-        setSalesTrend([
-          { name: "Mon", sales: 400, orders: 12 },
-          { name: "Tue", sales: 300, orders: 8 },
-          { name: "Wed", sales: 600, orders: 18 },
-          { name: "Thu", sales: 450, orders: 14 },
-          { name: "Fri", sales: 700, orders: 22 },
-          { name: "Sat", sales: 850, orders: 28 },
-          { name: "Sun", sales: 920, orders: 30 },
-        ]);
       }
     } catch (err) {
       console.error("Failed to fetch sales trend:", err);
-      setSalesTrend([
-        { name: "Mon", sales: 400, orders: 12 },
-        { name: "Tue", sales: 300, orders: 8 },
-        { name: "Wed", sales: 600, orders: 18 },
-        { name: "Thu", sales: 450, orders: 14 },
-        { name: "Fri", sales: 700, orders: 22 },
-        { name: "Sat", sales: 850, orders: 28 },
-        { name: "Sun", sales: 920, orders: 30 },
-      ]);
     }
+  }, [api, dateRange.from, dateRange.to]);
+
+  useEffect(() => {
+    fetchStats();
+    fetchSalesTrend();
+  }, [fetchStats, fetchSalesTrend]);
+
+  const handleRefresh = () => {
+    fetchStats();
+    fetchSalesTrend();
   };
 
   const downloadPDFReport = () => {
@@ -110,7 +137,7 @@ const ReportsPage = () => {
       const margin = 15;
 
       // Colors
-      const primaryColor = [239, 68, 68]; // red
+      const primaryColor = [239, 68, 68];
       const textColor = [0, 0, 0];
       const lightGray = [200, 200, 200];
 
@@ -143,7 +170,7 @@ const ReportsPage = () => {
       pdf.line(margin, yPosition, pageWidth - margin, yPosition);
       yPosition += 8;
 
-      // ===================== KEY METRICS =====================
+      // KEY METRICS
       pdf.setFontSize(13);
       pdf.setFont("helvetica", "bold");
       pdf.text("KEY METRICS", margin, yPosition);
@@ -153,27 +180,33 @@ const ReportsPage = () => {
         {
           label: "Today's Sales",
           value: "₹" + Number(stats.todaySales || 0).toFixed(0),
-          note: "+12.5% vs yesterday",
+          note: `${stats.salesGrowth >= 0 ? "+" : ""}${
+            stats.salesGrowth
+          }% vs yesterday`,
         },
         {
           label: "Orders Today",
           value: String(stats.todayOrders || 0),
-          note: "+8.2% vs yesterday",
+          note: `${stats.ordersGrowth >= 0 ? "+" : ""}${
+            stats.ordersGrowth
+          }% vs yesterday`,
         },
         {
           label: "Items Sold",
           value: String(stats.totalItemsSold || 0),
-          note: "-3.1% vs yesterday",
+          note: `${stats.itemsGrowth >= 0 ? "+" : ""}${
+            stats.itemsGrowth
+          }% vs yesterday`,
         },
         {
-          label: "Low Stock Alerts",
-          value: String(stats.lowStockCount || 0),
-          note: (stats.lowStockCount || 0) > 0 ? "Action required" : "All good",
+          label: "Avg Order Value",
+          value: "₹" + Number(stats.avgOrderValue || 0).toFixed(0),
+          note: "Per order average",
         },
       ];
 
       const metricsPerRow = 2;
-      const metricWidth = (pageWidth - 2 * margin - 10) / metricsPerRow; // 10 = gap
+      const metricWidth = (pageWidth - 2 * margin - 10) / metricsPerRow;
 
       pdf.setFontSize(9);
       pdf.setFont("helvetica", "normal");
@@ -184,35 +217,29 @@ const ReportsPage = () => {
         const xPos = margin + col * (metricWidth + 10);
         const yPos = yPosition + row * 20;
 
-        // card background
         pdf.setFillColor(245, 245, 245);
         pdf.rect(xPos, yPos, metricWidth, 16, "F");
-
-        // border
         pdf.setDrawColor(lightGray[0], lightGray[1], lightGray[2]);
         pdf.rect(xPos, yPos, metricWidth, 16);
 
-        // label
         pdf.setTextColor(100, 100, 100);
         pdf.setFontSize(8);
         pdf.text(metric.label, xPos + 3, yPos + 5);
 
-        // value
         pdf.setTextColor(0, 0, 0);
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(11);
         pdf.text(metric.value, xPos + 3, yPos + 11);
 
-        // note
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(7);
-        pdf.setTextColor(34, 197, 94); // green
+        pdf.setTextColor(34, 197, 94);
         pdf.text(metric.note, xPos + 3, yPos + 15);
       });
 
-      yPosition += 45; // move below metric cards
+      yPosition += 45;
 
-      // ===================== TOP SELLING ITEMS =====================
+      // TOP SELLING ITEMS
       if (yPosition > pageHeight - 60) {
         pdf.addPage();
         yPosition = 15;
@@ -224,7 +251,6 @@ const ReportsPage = () => {
       pdf.text("TOP SELLING ITEMS", margin, yPosition);
       yPosition += 8;
 
-      // table header
       const headers = ["#", "Item Name", "Units Sold", "Revenue (₹)"];
       const colWidths = [10, 70, 25, 35];
       let x = margin;
@@ -253,22 +279,13 @@ const ReportsPage = () => {
           }
 
           x = margin;
-          const revenue =
-            item.price && item._count?.orderItems
-              ? Number(item.price * item._count.orderItems).toFixed(0)
-              : "0";
-
           pdf.text(String(idx + 1), x + 2, yPosition);
           x += colWidths[0];
-
           pdf.text(String(item.name || "").slice(0, 30), x + 2, yPosition);
           x += colWidths[1];
-
-          pdf.text(String(item._count?.orderItems || 0), x + 2, yPosition);
+          pdf.text(String(item.totalSold || 0), x + 2, yPosition);
           x += colWidths[2];
-
-          pdf.text(revenue, x + 2, yPosition);
-
+          pdf.text(String(Math.round(item.revenue || 0)), x + 2, yPosition);
           yPosition += 5;
         });
       } else {
@@ -278,7 +295,7 @@ const ReportsPage = () => {
 
       yPosition += 8;
 
-      // ===================== LOW STOCK ALERTS =====================
+      // LOW STOCK ALERTS
       if (yPosition > pageHeight - 60) {
         pdf.addPage();
         yPosition = 15;
@@ -312,7 +329,7 @@ const ReportsPage = () => {
           pdf.setFont("helvetica", "normal");
           pdf.setFontSize(7);
           pdf.text(
-            "Only " + String(item.inventory?.quantity || 0) + " units left.",
+            "Only " + String(item.quantity || 0) + " units left.",
             margin + 3,
             yPosition + 4,
           );
@@ -331,7 +348,7 @@ const ReportsPage = () => {
       pdf.setFontSize(7);
       pdf.setTextColor(148, 163, 184);
       pdf.text(
-        "Auto‑generated report from Cafe POS. For detailed analytics, use the dashboard.",
+        "Auto-generated report from Cafe POS Pro. For detailed analytics, use the dashboard.",
         margin,
         pageHeight - 10,
       );
@@ -345,25 +362,26 @@ const ReportsPage = () => {
     }
   };
 
-  // Calculate growth percentages
-  const yesterdaySales = stats.todaySales * 0.89;
-  const yesterdayOrders = stats.todayOrders * 0.92;
-  const yesterdayItems = stats.totalItemsSold * 1.03;
+  // Colors for pie chart
+  const COLORS = [
+    "#ef4444",
+    "#3b82f6",
+    "#22c55e",
+    "#f59e0b",
+    "#8b5cf6",
+    "#ec4899",
+  ];
 
-  const salesGrowth = yesterdaySales
-    ? (((stats.todaySales - yesterdaySales) / yesterdaySales) * 100).toFixed(1)
-    : 0;
-  const ordersGrowth = yesterdayOrders
-    ? (((stats.todayOrders - yesterdayOrders) / yesterdayOrders) * 100).toFixed(
-        1,
-      )
-    : 0;
-  const itemsGrowth = yesterdayItems
-    ? (
-        ((stats.totalItemsSold - yesterdayItems) / yesterdayItems) *
-        100
-      ).toFixed(1)
-    : 0;
+  // // Payment breakdown data for pie chart
+  // const paymentData = useMemo(
+  //   () =>
+  //     [
+  //       { name: "Cash", value: stats.paymentBreakdown?.cash || 0 },
+  //       { name: "Card", value: stats.paymentBreakdown?.card || 0 },
+  //       { name: "UPI", value: stats.paymentBreakdown?.upi || 0 },
+  //     ].filter((item) => item.value > 0),
+  //   [stats.paymentBreakdown],
+  // );
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -379,7 +397,7 @@ const ReportsPage = () => {
                 Business Reports & Analytics
               </h1>
               <p className="text-sm text-gray-500 mt-1">
-                Track performance and insights
+                Real-time performance tracking and insights
               </p>
             </div>
 
@@ -406,10 +424,13 @@ const ReportsPage = () => {
                 />
               </div>
               <button
-                onClick={fetchSalesTrend}
-                className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-all flex items-center space-x-2"
+                onClick={handleRefresh}
+                disabled={loading}
+                className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-all flex items-center space-x-2 disabled:opacity-50"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw
+                  className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
+                />
                 <span>Refresh</span>
               </button>
               <button
@@ -443,21 +464,21 @@ const ReportsPage = () => {
                       Today's Sales
                     </p>
                     <p className="text-3xl font-bold text-gray-900 mb-1">
-                      ₹{Number(stats.todaySales || 0).toFixed(0)}
+                      ₹{Number(stats.todaySales || 0).toLocaleString()}
                     </p>
                     <div className="flex items-center space-x-1 text-xs">
-                      {salesGrowth >= 0 ? (
+                      {stats.salesGrowth >= 0 ? (
                         <>
                           <TrendingUp className="w-3 h-3 text-green-600" />
                           <span className="text-green-600 font-medium">
-                            +{salesGrowth}%
+                            +{stats.salesGrowth}%
                           </span>
                         </>
                       ) : (
                         <>
                           <TrendingDown className="w-3 h-3 text-red-600" />
                           <span className="text-red-600 font-medium">
-                            {salesGrowth}%
+                            {stats.salesGrowth}%
                           </span>
                         </>
                       )}
@@ -481,18 +502,18 @@ const ReportsPage = () => {
                       {stats.todayOrders || 0}
                     </p>
                     <div className="flex items-center space-x-1 text-xs">
-                      {ordersGrowth >= 0 ? (
+                      {stats.ordersGrowth >= 0 ? (
                         <>
                           <TrendingUp className="w-3 h-3 text-green-600" />
                           <span className="text-green-600 font-medium">
-                            +{ordersGrowth}%
+                            +{stats.ordersGrowth}%
                           </span>
                         </>
                       ) : (
                         <>
                           <TrendingDown className="w-3 h-3 text-red-600" />
                           <span className="text-red-600 font-medium">
-                            {ordersGrowth}%
+                            {stats.ordersGrowth}%
                           </span>
                         </>
                       )}
@@ -505,33 +526,20 @@ const ReportsPage = () => {
                 </div>
               </div>
 
-              {/* Items Sold */}
+              {/* Average Order Value */}
               <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 hover:shadow-lg transition-shadow">
                 <div className="flex items-center justify-between">
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-600 mb-1">
-                      Items Sold
+                      Avg Order Value
                     </p>
                     <p className="text-3xl font-bold text-gray-900 mb-1">
-                      {stats.totalItemsSold || 0}
+                      ₹{Number(stats.avgOrderValue || 0).toFixed(0)}
                     </p>
                     <div className="flex items-center space-x-1 text-xs">
-                      {itemsGrowth >= 0 ? (
-                        <>
-                          <TrendingUp className="w-3 h-3 text-green-600" />
-                          <span className="text-green-600 font-medium">
-                            +{itemsGrowth}%
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <TrendingDown className="w-3 h-3 text-orange-600" />
-                          <span className="text-orange-600 font-medium">
-                            {itemsGrowth}%
-                          </span>
-                        </>
-                      )}
-                      <span className="text-gray-500">vs yesterday</span>
+                      <span className="text-gray-500">
+                        {stats.todayPaidOrders || 0} paid orders
+                      </span>
                     </div>
                   </div>
                   <div className="w-14 h-14 bg-purple-100 rounded-2xl flex items-center justify-center">
@@ -599,40 +607,129 @@ const ReportsPage = () => {
               </div>
             </div>
 
+            {/* Additional Stats Row */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Table Utilization */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600 mb-1">
+                      Table Utilization
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {stats.tableUtilization || 0}%
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {stats.occupiedTables || 0} of {stats.totalTables || 0}{" "}
+                      tables occupied
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
+                    <Users className="w-6 h-6 text-green-600" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Items Sold Today */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600 mb-1">
+                      Items Sold Today
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {stats.totalItemsSold || 0}
+                    </p>
+                    <div className="flex items-center space-x-1 text-xs mt-1">
+                      {stats.itemsGrowth >= 0 ? (
+                        <span className="text-green-600 font-medium">
+                          +{stats.itemsGrowth}%
+                        </span>
+                      ) : (
+                        <span className="text-red-600 font-medium">
+                          {stats.itemsGrowth}%
+                        </span>
+                      )}
+                      <span className="text-gray-500">vs yesterday</span>
+                    </div>
+                  </div>
+                  <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+                    <Package className="w-6 h-6 text-blue-600" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Methods */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                <p className="text-sm font-medium text-gray-600 mb-3">
+                  Payment Methods (Today)
+                </p>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2">
+                      <Banknote className="w-4 h-4 text-green-600" />
+                      <span className="text-sm font-medium">
+                        {stats.paymentBreakdown?.cash || 0}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <CreditCard className="w-4 h-4 text-blue-600" />
+                      <span className="text-sm font-medium">
+                        {stats.paymentBreakdown?.card || 0}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Smartphone className="w-4 h-4 text-purple-600" />
+                      <span className="text-sm font-medium">
+                        {stats.paymentBreakdown?.upi || 0}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Charts Section */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               {/* Sales Trend */}
               <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
                 <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center">
                   <TrendingUp className="w-5 h-5 mr-2 text-red-500" />
-                  Sales Trend (Last 7 Days)
+                  Sales Trend
                 </h2>
-                <ResponsiveContainer width="100%" height={280}>
-                  <LineChart data={salesTrend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis
-                      dataKey="name"
-                      tick={{ fontSize: 12 }}
-                      stroke="#9ca3af"
-                    />
-                    <YAxis tick={{ fontSize: 12 }} stroke="#9ca3af" />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#fff",
-                        border: "1px solid #e5e7eb",
-                        borderRadius: "12px",
-                      }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="sales"
-                      stroke="#ef4444"
-                      strokeWidth={3}
-                      dot={{ fill: "#ef4444", r: 5 }}
-                      activeDot={{ r: 7 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                {salesTrend.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={salesTrend}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis
+                        dataKey="fullDate"
+                        tick={{ fontSize: 11 }}
+                        stroke="#9ca3af"
+                      />
+                      <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "#fff",
+                          border: "1px solid #e5e7eb",
+                          borderRadius: "12px",
+                        }}
+                        formatter={(value) => [`₹${value}`, "Sales"]}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="sales"
+                        stroke="#ef4444"
+                        strokeWidth={3}
+                        dot={{ fill: "#ef4444", r: 4 }}
+                        activeDot={{ r: 6 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-gray-500">
+                    No sales data for selected period
+                  </div>
+                )}
               </div>
 
               {/* Orders Trend */}
@@ -641,29 +738,120 @@ const ReportsPage = () => {
                   <BarChart3 className="w-5 h-5 mr-2 text-blue-500" />
                   Order Volume
                 </h2>
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={salesTrend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis
-                      dataKey="name"
-                      tick={{ fontSize: 12 }}
-                      stroke="#9ca3af"
-                    />
-                    <YAxis tick={{ fontSize: 12 }} stroke="#9ca3af" />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#fff",
-                        border: "1px solid #e5e7eb",
-                        borderRadius: "12px",
-                      }}
-                    />
-                    <Bar
-                      dataKey="orders"
-                      fill="#3b82f6"
-                      radius={[8, 8, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+                {salesTrend.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={salesTrend}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis
+                        dataKey="fullDate"
+                        tick={{ fontSize: 11 }}
+                        stroke="#9ca3af"
+                      />
+                      <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "#fff",
+                          border: "1px solid #e5e7eb",
+                          borderRadius: "12px",
+                        }}
+                      />
+                      <Bar
+                        dataKey="orders"
+                        fill="#3b82f6"
+                        radius={[8, 8, 0, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-gray-500">
+                    No order data for selected period
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Category Sales & Peak Hours */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Sales by Category */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                <h2 className="text-lg font-bold text-gray-900 mb-6">
+                  Sales by Category
+                </h2>
+                {stats.salesByCategory && stats.salesByCategory.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <PieChart>
+                      <Pie
+                        data={stats.salesByCategory}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        label={({ name, percent }) =>
+                          `${name} ${(percent * 100).toFixed(0)}%`
+                        }
+                        outerRadius={100}
+                        fill="#8884d8"
+                        dataKey="value"
+                      >
+                        {stats.salesByCategory.map((entry, index) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={COLORS[index % COLORS.length]}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value) => `₹${Math.round(value)}`} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-gray-500">
+                    No category data available
+                  </div>
+                )}
+              </div>
+
+              {/* Peak Hours */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+                <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center">
+                  <Clock className="w-5 h-5 mr-2 text-orange-500" />
+                  Peak Hours (Today)
+                </h2>
+                {stats.peakHours && stats.peakHours.length > 0 ? (
+                  <div className="space-y-4">
+                    {stats.peakHours.map((item, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center justify-between"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <div
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                              index === 0
+                                ? "bg-red-100 text-red-600"
+                                : index === 1
+                                ? "bg-orange-100 text-orange-600"
+                                : "bg-gray-100 text-gray-600"
+                            }`}
+                          >
+                            <span className="text-sm font-bold">
+                              #{index + 1}
+                            </span>
+                          </div>
+                          <span className="font-medium text-gray-900">
+                            {item.hour.toString().padStart(2, "0")}:00 -{" "}
+                            {(item.hour + 1).toString().padStart(2, "0")}:00
+                          </span>
+                        </div>
+                        <span className="text-sm font-semibold text-gray-700">
+                          {item.orders} orders
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-gray-500">
+                    No order data for today
+                  </div>
+                )}
               </div>
             </div>
 
@@ -672,7 +860,7 @@ const ReportsPage = () => {
               {/* Top Selling Items */}
               <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
                 <h2 className="text-lg font-bold text-gray-900 mb-6">
-                  Top Selling Items
+                  Top Selling Items (Last 7 Days)
                 </h2>
                 {stats.topSellingItems && stats.topSellingItems.length > 0 ? (
                   <div className="space-y-4">
@@ -692,15 +880,12 @@ const ReportsPage = () => {
                               {item.name}
                             </p>
                             <p className="text-sm text-gray-500">
-                              {item._count?.orderItems || 0} sold
+                              {item.totalSold} sold • {item.category}
                             </p>
                           </div>
                         </div>
                         <p className="text-lg font-bold text-red-600">
-                          ₹
-                          {Number(
-                            item.price * (item._count?.orderItems || 0),
-                          ).toFixed(0)}
+                          ₹{Math.round(item.revenue || 0).toLocaleString()}
                         </p>
                       </div>
                     ))}
@@ -731,7 +916,8 @@ const ReportsPage = () => {
                             {item.name}
                           </h3>
                           <p className="text-sm text-orange-600 mt-1">
-                            Only {item.inventory?.quantity || 0} left
+                            Only {item.quantity || 0} left •{" "}
+                            {item.category || "Uncategorized"}
                           </p>
                         </div>
                         <button className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold rounded-lg transition-colors">
