@@ -8,6 +8,7 @@ import {
   Home,
   Package,
   Beaker,
+  DollarSign,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
@@ -82,6 +83,18 @@ const Navbar = () => {
             >
               <BarChart3 className="w-4 h-4" />
               <span className="hidden md:inline">Reports</span>
+            </Link>
+
+            <Link
+              to="/profit-analysis"
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center space-x-2 ${
+                isActive("/profit-analysis")
+                  ? "bg-red-50 text-red-600"
+                  : "text-gray-700 hover:text-gray-900 hover:bg-gray-100"
+              }`}
+            >
+              <DollarSign className="w-4 h-4" />
+              <span className="hidden md:inline">Profits</span>
             </Link>
 
             <Link

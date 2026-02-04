@@ -9,6 +9,7 @@ import BillingPage from './pages/BillingPage';
 import ReportsPage from './pages/ReportsPage';
 import OrdersPage from "./pages/OrdersPage";
 import InventoryPage from "./pages/InventoryPage";
+import ProfitAnalysisPage from "./pages/ProfitAnalysisPage";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -43,6 +44,11 @@ function AppContent() {
           <Route path="/inventory" element={
             <ProtectedRoute>
               <InventoryPage />
+            </ProtectedRoute>
+          } />
+          <Route path="/profit-analysis" element={
+            <ProtectedRoute>
+              <ProfitAnalysisPage />
             </ProtectedRoute>
           } />
         </Routes>

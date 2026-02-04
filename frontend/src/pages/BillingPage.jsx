@@ -1,8 +1,6 @@
 import axios from "axios";
 import React, { useState, useEffect, useCallback } from "react";
 import { useMenu } from "../context/MenuContext";
-// Remove or comment out useAuth if user is not used
-// import { useAuth } from "../context/AuthContext";
 import {
   ShoppingCart,
   Trash2,
@@ -11,19 +9,26 @@ import {
   Search,
   X,
   ChefHat,
+  Edit3,
+  MessageSquare,
 } from "lucide-react";
 import Navbar from "../components/navbar";
 
 const BillingPage = () => {
   const { menuItems } = useMenu();
-  // Remove this line since user is not used:
-  // const { user } = useAuth();
   const [tables, setTables] = useState([]);
   const [cart, setCart] = useState([]);
   const [tableId, setTableId] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [loading, setLoading] = useState(false);
+
+  // NEW: Modifications state
+  const [modifications, setModifications] = useState({ all: [], grouped: {} });
+  const [showModModal, setShowModModal] = useState(false);
+  const [editingCartIndex, setEditingCartIndex] = useState(null);
+  const [selectedMods, setSelectedMods] = useState([]);
+  const [itemNotes, setItemNotes] = useState("");
 
   // normalize status for comparisons
   const getStatus = (s) => String(s || "").toLowerCase();
@@ -74,9 +79,20 @@ const BillingPage = () => {
     }
   }, []);
 
+  // NEW: Fetch modifications
+  const fetchModifications = useCallback(async () => {
+    try {
+      const res = await axios.get("/api/modifications");
+      setModifications(res.data || { all: [], grouped: {} });
+    } catch (err) {
+      console.error("Failed to fetch modifications:", err);
+    }
+  }, []);
+
   // Fetch tables on mount
   useEffect(() => {
     fetchTables();
+    fetchModifications();
     const interval = setInterval(fetchTables, 30000);
     const handleOrderUpdated = () => {
       fetchTables();
@@ -87,9 +103,7 @@ const BillingPage = () => {
       clearInterval(interval);
       window.removeEventListener("order-updated", handleOrderUpdated);
     };
-  }, [fetchTables]);
-
-  // ...rest of the component remains the same
+  }, [fetchTables, fetchModifications]);
 
   const addToCart = (item) => {
     if (!item.inventory || item.inventory.quantity <= 0) {
@@ -97,46 +111,123 @@ const BillingPage = () => {
       return;
     }
 
-    const existing = cart.find((c) => c.id === item.id);
+    const menuItemId = item.id;
 
-    if (existing) {
+    // NEW: Check for existing item without modifications
+    const existingIndex = cart.findIndex(
+      (c) =>
+        c.menuItemId === menuItemId &&
+        !c.notes &&
+        (!c.modifications || c.modifications.length === 0),
+    );
+
+    if (existingIndex >= 0) {
+      const existing = cart[existingIndex];
       if (existing.quantity + 1 > item.inventory.quantity) {
         alert(
           `❌ Only ${item.inventory.quantity} ${item.name} available in stock!`,
         );
         return;
       }
-      setCart(
-        cart.map((c) =>
-          c.id === item.id ? { ...c, quantity: c.quantity + 1 } : c,
-        ),
-      );
+      const updated = [...cart];
+      updated[existingIndex].quantity += 1;
+      setCart(updated);
     } else {
       setCart([
         ...cart,
-        { ...item, quantity: 1, price: parseFloat(item.price) },
+        {
+          menuItemId: menuItemId, // Explicitly set menuItemId
+          id: menuItemId, // Keep id for backward compatibility
+          name: item.name,
+          price: parseFloat(item.price),
+          quantity: 1,
+          notes: "",
+          modifications: [],
+          inventory: item.inventory, // Keep inventory for stock checks
+        },
       ]);
     }
   };
 
-  const updateQuantity = (itemId, qty) => {
+  const updateQuantity = (index, qty) => {
     if (qty <= 0) {
-      setCart(cart.filter((c) => c.id !== itemId));
+      setCart(cart.filter((_, i) => i !== index));
       return;
     }
-    const item = menuItems.find((m) => m.id === itemId);
-    if (item && item.inventory && qty > item.inventory.quantity) {
-      alert(`❌ Only ${item.inventory.quantity} ${item.name} available!`);
+    const item = cart[index];
+    const menuItem = menuItems.find((m) => m.id === item.menuItemId);
+    if (menuItem && menuItem.inventory && qty > menuItem.inventory.quantity) {
+      alert(`❌ Only ${menuItem.inventory.quantity} ${item.name} available!`);
       return;
     }
-    setCart(cart.map((c) => (c.id === itemId ? { ...c, quantity: qty } : c)));
+    const updated = [...cart];
+    updated[index].quantity = qty;
+    setCart(updated);
   };
 
-  const removeFromCart = (itemId) =>
-    setCart(cart.filter((c) => c.id !== itemId));
+  const removeFromCart = (index) => setCart(cart.filter((_, i) => i !== index));
 
   const clearCart = () => {
     if (window.confirm("Clear entire cart?")) setCart([]);
+  };
+
+  // NEW: Open modification modal
+  const openModModal = (index) => {
+    const item = cart[index];
+    setEditingCartIndex(index);
+    setSelectedMods(item.modifications || []);
+    setItemNotes(item.notes || "");
+    setShowModModal(true);
+  };
+
+  // NEW: Toggle modification
+  const toggleMod = (mod) => {
+    const existingIndex = selectedMods.findIndex((m) => m.id === mod.id);
+    if (existingIndex >= 0) {
+      setSelectedMods(selectedMods.filter((m) => m.id !== mod.id));
+    } else {
+      setSelectedMods([...selectedMods, { ...mod, quantity: 1 }]);
+    }
+  };
+
+  // NEW: Update mod quantity
+  const updateModQuantity = (modId, delta) => {
+    setSelectedMods(
+      selectedMods.map((m) => {
+        if (m.id === modId) {
+          const newQty = Math.max(1, (m.quantity || 1) + delta);
+          return { ...m, quantity: newQty };
+        }
+        return m;
+      }),
+    );
+  };
+
+  // NEW: Save modifications
+  const saveModifications = () => {
+    const updated = [...cart];
+    updated[editingCartIndex] = {
+      ...updated[editingCartIndex],
+      modifications: selectedMods,
+      notes: itemNotes,
+    };
+    setCart(updated);
+    setShowModModal(false);
+    setEditingCartIndex(null);
+    setSelectedMods([]);
+    setItemNotes("");
+  };
+
+  // NEW: Calculate item total (with modifications)
+  const getItemTotal = (item) => {
+    let total = item.price * item.quantity;
+    if (item.modifications) {
+      for (const mod of item.modifications) {
+        total +=
+          parseFloat(mod.price || 0) * (mod.quantity || 1) * item.quantity;
+      }
+    }
+    return total;
   };
 
   const placeOrder = async () => {
@@ -168,7 +259,6 @@ const BillingPage = () => {
           return;
         }
       } else {
-        // If reserved but no window available, block placing orders to be safe
         alert(
           `❌ Table ${getTableLabel(
             table,
@@ -180,10 +270,13 @@ const BillingPage = () => {
 
     setLoading(true);
     try {
+      // UPDATED: Include notes and modifications
       const orderItems = cart.map((item) => ({
-        menuItemId: item.id,
+        menuItemId: item.menuItemId,
         quantity: item.quantity,
         price: item.price,
+        notes: item.notes || null,
+        modifications: item.modifications || [],
       }));
 
       const res = await axios.post("/api/orders", { tableId, orderItems });
@@ -214,10 +307,8 @@ const BillingPage = () => {
     }
   };
 
-  const subtotal = cart.reduce(
-    (sum, item) => sum + item.price * item.quantity,
-    0,
-  );
+  // UPDATED: Use getItemTotal for calculations
+  const subtotal = cart.reduce((sum, item) => sum + getItemTotal(item), 0);
   const tax = subtotal * 0.05;
   const total = subtotal + tax;
 
@@ -284,8 +375,6 @@ const BillingPage = () => {
           </div>
         </div>
       </div>
-
-      {/* ... rest of UI is unchanged (menu grid + cart) ... */}
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -415,51 +504,101 @@ const BillingPage = () => {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {cart.map((item) => (
+                    {cart.map((item, index) => (
                       <div
-                        key={item.id}
-                        className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200"
+                        key={index}
+                        className="flex flex-col p-3 bg-gray-50 rounded-xl border border-gray-200"
                       >
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-gray-900 text-sm truncate">
-                            {item.name}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            ₹{item.price} × {item.quantity}
-                          </p>
-                        </div>
-                        <div className="flex items-center space-x-3 ml-3">
-                          <div className="flex items-center space-x-2 bg-white rounded-lg border border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-gray-900 text-sm truncate">
+                              {item.name}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              ₹{item.price} × {item.quantity}
+                            </p>
+                          </div>
+                          <div className="flex items-center space-x-3 ml-3">
+                            <div className="flex items-center space-x-2 bg-white rounded-lg border border-gray-200">
+                              <button
+                                onClick={() =>
+                                  updateQuantity(index, item.quantity - 1)
+                                }
+                                className="p-1.5 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-l-lg transition-colors"
+                              >
+                                <Minus className="w-4 h-4" />
+                              </button>
+                              <span className="w-8 text-center text-sm font-semibold">
+                                {item.quantity}
+                              </span>
+                              <button
+                                onClick={() =>
+                                  updateQuantity(index, item.quantity + 1)
+                                }
+                                className="p-1.5 text-gray-600 hover:text-green-600 hover:bg-green-50 rounded-r-lg transition-colors"
+                              >
+                                <Plus className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <p className="font-bold text-gray-900 w-16 text-right">
+                              ₹{getItemTotal(item).toFixed(0)}
+                            </p>
+                            {/* NEW: Edit button for modifications */}
                             <button
-                              onClick={() =>
-                                updateQuantity(item.id, item.quantity - 1)
-                              }
-                              className="p-1.5 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-l-lg transition-colors"
+                              onClick={() => openModModal(index)}
+                              className="p-1.5 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Add notes/modifications"
                             >
-                              <Minus className="w-4 h-4" />
+                              <Edit3 className="w-4 h-4" />
                             </button>
-                            <span className="w-8 text-center text-sm font-semibold">
-                              {item.quantity}
-                            </span>
                             <button
-                              onClick={() =>
-                                updateQuantity(item.id, item.quantity + 1)
-                              }
-                              className="p-1.5 text-gray-600 hover:text-green-600 hover:bg-green-50 rounded-r-lg transition-colors"
+                              onClick={() => removeFromCart(index)}
+                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                             >
-                              <Plus className="w-4 h-4" />
+                              <X className="w-4 h-4" />
                             </button>
                           </div>
-                          <p className="font-bold text-gray-900 w-16 text-right">
-                            ₹{(item.price * item.quantity).toFixed(2)}
-                          </p>
-                          <button
-                            onClick={() => removeFromCart(item.id)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
                         </div>
+
+                        {/* NEW: Show modifications and notes */}
+                        {((item.modifications &&
+                          item.modifications.length > 0) ||
+                          item.notes) && (
+                          <div className="mt-2 pt-2 border-t border-gray-200">
+                            {item.modifications &&
+                              item.modifications.length > 0 && (
+                                <div className="space-y-0.5">
+                                  {item.modifications.map((mod, idx) => (
+                                    <p
+                                      key={idx}
+                                      className="text-xs text-blue-600"
+                                    >
+                                      + {mod.name}{" "}
+                                      {mod.quantity > 1
+                                        ? `x${mod.quantity}`
+                                        : ""}
+                                      {parseFloat(mod.price) > 0 &&
+                                        ` (+₹${
+                                          parseFloat(mod.price) *
+                                          (mod.quantity || 1)
+                                        })`}
+                                      {parseFloat(mod.price) < 0 &&
+                                        ` (₹${
+                                          parseFloat(mod.price) *
+                                          (mod.quantity || 1)
+                                        })`}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            {item.notes && (
+                              <p className="text-xs text-orange-600 mt-1 flex items-center">
+                                <MessageSquare className="w-3 h-3 mr-1" />
+                                {item.notes}
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -502,6 +641,177 @@ const BillingPage = () => {
           </div>
         </div>
       </div>
+
+      {/* NEW: Modification Modal */}
+      {showModModal && editingCartIndex !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">
+                Customize: {cart[editingCartIndex]?.name}
+              </h3>
+              <button
+                onClick={() => setShowModModal(false)}
+                className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Notes */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Special Instructions
+              </label>
+              <textarea
+                value={itemNotes}
+                onChange={(e) => setItemNotes(e.target.value)}
+                placeholder="e.g., Less sugar, well done, no ice..."
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-red-300 focus:outline-none"
+                rows="2"
+              />
+            </div>
+
+            {/* Modifications by category */}
+            {Object.entries(modifications.grouped || {}).map(
+              ([category, mods]) => (
+                <div key={category} className="mb-6">
+                  <h4 className="text-sm font-bold text-gray-700 uppercase mb-3">
+                    {category}
+                  </h4>
+                  <div className="grid grid-cols-2 gap-2">
+                    {mods.map((mod) => {
+                      const isSelected = selectedMods.some(
+                        (m) => m.id === mod.id,
+                      );
+                      const selectedMod = selectedMods.find(
+                        (m) => m.id === mod.id,
+                      );
+
+                      return (
+                        <div
+                          key={mod.id}
+                          className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                            isSelected
+                              ? "border-red-500 bg-red-50"
+                              : "border-gray-200 hover:border-gray-300"
+                          }`}
+                          onClick={() => toggleMod(mod)}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-gray-900 text-sm">
+                              {mod.name}
+                            </span>
+                            {parseFloat(mod.price) !== 0 && (
+                              <span
+                                className={`text-xs font-semibold ${
+                                  parseFloat(mod.price) > 0
+                                    ? "text-green-600"
+                                    : "text-red-600"
+                                }`}
+                              >
+                                {parseFloat(mod.price) > 0 ? "+" : ""}₹
+                                {parseFloat(mod.price)}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Quantity selector for selected paid mods */}
+                          {isSelected && parseFloat(mod.price) > 0 && (
+                            <div className="flex items-center justify-center mt-2 space-x-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateModQuantity(mod.id, -1);
+                                }}
+                                className="p-1 bg-gray-200 hover:bg-gray-300 rounded"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <span className="text-sm font-semibold w-6 text-center">
+                                {selectedMod?.quantity || 1}
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateModQuantity(mod.id, 1);
+                                }}
+                                className="p-1 bg-gray-200 hover:bg-gray-300 rounded"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ),
+            )}
+
+            {/* No modifications message */}
+            {Object.keys(modifications.grouped || {}).length === 0 && (
+              <div className="text-center py-8 text-gray-500">
+                <p>No modifications available</p>
+                <p className="text-xs mt-1">
+                  You can still add special instructions above
+                </p>
+              </div>
+            )}
+
+            {/* Summary */}
+            {selectedMods.length > 0 && (
+              <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">
+                  Selected:
+                </p>
+                <div className="space-y-1">
+                  {selectedMods.map((mod) => (
+                    <div key={mod.id} className="flex justify-between text-sm">
+                      <span>
+                        {mod.name} {mod.quantity > 1 ? `x${mod.quantity}` : ""}
+                      </span>
+                      <span
+                        className={
+                          parseFloat(mod.price) >= 0
+                            ? "text-green-600"
+                            : "text-red-600"
+                        }
+                      >
+                        {parseFloat(mod.price) !== 0 && (
+                          <>
+                            ₹
+                            {(
+                              parseFloat(mod.price) * (mod.quantity || 1)
+                            ).toFixed(0)}
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex space-x-3">
+              <button
+                onClick={saveModifications}
+                className="flex-1 py-3 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold rounded-xl"
+              >
+                Save Changes
+              </button>
+              <button
+                onClick={() => setShowModModal(false)}
+                className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

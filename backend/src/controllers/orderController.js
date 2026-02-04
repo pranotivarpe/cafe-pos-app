@@ -92,36 +92,30 @@ exports.createOrder = async (req, res, next) => {
             return res.status(400).json({ error: 'Table and order items are required' });
         }
 
-        // Validate and check simple inventory (backward compatible)
+        // Calculate totals including modifications
+        let subtotal = 0;
+
         for (const item of orderItems) {
-            const inventory = await prisma.inventory.findUnique({
-                where: { menuItemId: item.menuItemId }
-            });
+            // Base price
+            let itemTotal = parseFloat(item.price) * item.quantity;
 
-            if (!inventory) {
-                const menuItem = await prisma.menuItem.findUnique({ where: { id: item.menuItemId } });
-                console.warn(`No simple inventory found for ${menuItem?.name}, checking ingredients only`);
+            // Add modification charges
+            if (item.modifications && item.modifications.length > 0) {
+                for (const mod of item.modifications) {
+                    itemTotal += parseFloat(mod.price || 0) * (mod.quantity || 1) * item.quantity;
+                }
             }
 
-            // Only check simple inventory if it exists and has quantity > 0
-            if (inventory && inventory.quantity > 0 && inventory.quantity < item.quantity) {
-                const menuItem = await prisma.menuItem.findUnique({ where: { id: item.menuItemId } });
-                return res.status(400).json({
-                    error: `Insufficient stock for ${menuItem?.name || 'item'}. Available: ${inventory.quantity}`
-                });
-            }
+            subtotal += itemTotal;
         }
 
-        const subtotal = orderItems.reduce((sum, item) =>
-            sum + (parseFloat(item.price) * Number(item.quantity)), 0
-        );
         const tax = subtotal * 0.05;
         const total = subtotal + tax;
 
         const billNumber = generateBillNumber();
 
         const order = await prisma.$transaction(async (tx) => {
-            // Check ingredient availability FIRST
+            // Check ingredient availability
             const missingIngredients = await checkIngredientAvailability(tx, orderItems);
 
             if (missingIngredients.length > 0) {
@@ -145,7 +139,8 @@ exports.createOrder = async (req, res, next) => {
                         create: orderItems.map(item => ({
                             menuItemId: item.menuItemId,
                             quantity: item.quantity,
-                            price: parseFloat(item.price)
+                            price: parseFloat(item.price),
+                            notes: item.notes || null
                         }))
                     }
                 },
@@ -159,7 +154,26 @@ exports.createOrder = async (req, res, next) => {
                 }
             });
 
-            // Deduct ingredients (NEW - this is the important part!)
+            // Add modifications to order items
+            for (let i = 0; i < orderItems.length; i++) {
+                const item = orderItems[i];
+                const createdOrderItem = newOrder.items[i];
+
+                if (item.modifications && item.modifications.length > 0) {
+                    for (const mod of item.modifications) {
+                        await tx.orderItemModification.create({
+                            data: {
+                                orderItemId: createdOrderItem.id,
+                                modificationId: mod.id,
+                                quantity: mod.quantity || 1,
+                                price: parseFloat(mod.price || 0)
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Deduct ingredients
             await deductIngredients(tx, orderItems, newOrder.id);
 
             // Deduct simple inventory (backward compatible)
@@ -179,7 +193,7 @@ exports.createOrder = async (req, res, next) => {
                 }
             }
 
-            // Update table status to OCCUPIED
+            // Update table status
             await tx.table.update({
                 where: { id: parseInt(tableId, 10) },
                 data: {
@@ -190,7 +204,23 @@ exports.createOrder = async (req, res, next) => {
                 }
             });
 
-            return newOrder;
+            // Fetch complete order with modifications
+            const completeOrder = await tx.order.findUnique({
+                where: { id: newOrder.id },
+                include: {
+                    table: true,
+                    items: {
+                        include: {
+                            menuItem: { include: { category: true } },
+                            modifications: {
+                                include: { modification: true }
+                            }
+                        }
+                    }
+                }
+            });
+
+            return completeOrder;
         });
 
         res.status(201).json({
@@ -201,12 +231,37 @@ exports.createOrder = async (req, res, next) => {
     } catch (error) {
         console.error('Create order error:', error);
 
-        // Return the actual error message if it's about ingredients
         if (error.message && error.message.includes('Insufficient ingredients')) {
             return res.status(400).json({ error: error.message });
         }
 
         return res.status(500).json({ error: 'Failed to create order: ' + error.message });
+    }
+};
+
+// Update getOrders to include modifications
+exports.getOrders = async (req, res, next) => {
+    try {
+        const orders = await prisma.order.findMany({
+            include: {
+                table: true,
+                items: {
+                    include: {
+                        menuItem: {
+                            include: { category: true }
+                        },
+                        modifications: {
+                            include: { modification: true }
+                        }
+                    }
+                }
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 50
+        });
+        res.json(orders);
+    } catch (error) {
+        next(error);
     }
 };
 

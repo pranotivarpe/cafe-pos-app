@@ -124,8 +124,31 @@ model OrderItem {
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
   quantity   Int
   price      Decimal  @db.Decimal(10, 2)
+  notes         String?              
+  modifications OrderItemModification[]
 }
 
+model Modification {
+  id          Int                    @id @default(autoincrement())
+  name        String                 @unique  // e.g., "Extra Cheese", "No Onion"
+  price       Decimal                @db.Decimal(10, 2) @default(0)  // Extra charge (0 for free mods)
+  isActive    Boolean                @default(true)
+  category    String?                // e.g., "Add-ons", "Remove", "Spice Level"
+  orderItems  OrderItemModification[]
+  createdAt   DateTime               @default(now())
+}
+
+model OrderItemModification {
+  id             Int          @id @default(autoincrement())
+  orderItemId    Int
+  orderItem      OrderItem    @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  modificationId Int
+  modification   Modification @relation(fields: [modificationId], references: [id], onDelete: Cascade)
+  quantity       Int          @default(1)  // For things like "Double cheese" = quantity 2
+  price          Decimal      @db.Decimal(10, 2)  // Price at time of order
+  
+  @@unique([orderItemId, modificationId])
+}
 
 model Table {
   id            Int        @id @default(autoincrement())

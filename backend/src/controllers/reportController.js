@@ -1,6 +1,6 @@
 const prisma = require('../prisma');
 
-// Get statistics
+// Get statistics (EXISTING - unchanged)
 exports.getStats = async (req, res) => {
     try {
         console.log('📊 Fetching statistics...');
@@ -78,6 +78,10 @@ exports.getStats = async (req, res) => {
                 }
             }
         });
+
+        // Low stock ingredients
+        const allIngredients = await prisma.ingredient.findMany();
+        const lowStockIngredients = allIngredients.filter(ing => ing.currentStock <= ing.minStock);
 
         // Top selling items (last 7 days)
         const weekAgo = new Date();
@@ -277,7 +281,7 @@ exports.getStats = async (req, res) => {
     }
 };
 
-// Get sales trend
+// Get sales trend (EXISTING - unchanged)
 exports.getSalesTrend = async (req, res) => {
     try {
         const { from, to } = req.query;
@@ -356,7 +360,7 @@ exports.getSalesTrend = async (req, res) => {
     }
 };
 
-// Get category-wise sales
+// Get category-wise sales (EXISTING - unchanged)
 exports.getCategorySales = async (req, res) => {
     try {
         const { from, to } = req.query;
@@ -403,7 +407,7 @@ exports.getCategorySales = async (req, res) => {
     }
 };
 
-// Get hourly sales pattern
+// Get hourly sales pattern (EXISTING - unchanged)
 exports.getHourlySales = async (req, res) => {
     try {
         const { date } = req.query;
@@ -447,5 +451,132 @@ exports.getHourlySales = async (req, res) => {
     } catch (error) {
         console.error('Error fetching hourly sales:', error);
         res.status(500).json({ error: 'Failed to fetch hourly sales' });
+    }
+};
+
+// ============================================
+// NEW: Get profit analysis for all menu items
+// ============================================
+exports.getProfitAnalysis = async (req, res) => {
+    try {
+        const { from, to } = req.query;
+
+        const endDate = to ? new Date(to) : new Date();
+        endDate.setHours(23, 59, 59, 999);
+
+        const startDate = from ? new Date(from) : new Date();
+        if (!from) startDate.setDate(startDate.getDate() - 30);
+        startDate.setHours(0, 0, 0, 0);
+
+        // Get all menu items with ingredients
+        const menuItems = await prisma.menuItem.findMany({
+            include: {
+                category: true,
+                ingredients: {
+                    include: { ingredient: true }
+                }
+            },
+            orderBy: { name: 'asc' }
+        });
+
+        // Get sales data for each item in date range
+        const salesData = await prisma.orderItem.groupBy({
+            by: ['menuItemId'],
+            where: {
+                order: {
+                    createdAt: { gte: startDate, lte: endDate },
+                    status: 'PAID'
+                }
+            },
+            _sum: { quantity: true }
+        });
+
+        // Create sales map for quick lookup
+        const salesMap = {};
+        salesData.forEach(s => {
+            salesMap[s.menuItemId] = s._sum.quantity || 0;
+        });
+
+        // Calculate profit for each item
+        const profitAnalysis = menuItems.map(item => {
+            // Calculate total ingredient cost for one unit of this item
+            const ingredientCost = item.ingredients.reduce((total, ing) => {
+                const costPerUnit = parseFloat(ing.ingredient.costPerUnit || 0);
+                return total + (ing.quantity * costPerUnit);
+            }, 0);
+
+            const sellingPrice = parseFloat(item.price);
+            const profit = sellingPrice - ingredientCost;
+            const profitMargin = sellingPrice > 0 ? (profit / sellingPrice) * 100 : 0;
+            const unitsSold = salesMap[item.id] || 0;
+            const totalRevenue = sellingPrice * unitsSold;
+            const totalCost = ingredientCost * unitsSold;
+            const totalProfit = profit * unitsSold;
+
+            return {
+                id: item.id,
+                name: item.name,
+                category: item.category?.name || 'Uncategorized',
+                isActive: item.isActive,
+                sellingPrice: Math.round(sellingPrice * 100) / 100,
+                ingredientCost: Math.round(ingredientCost * 100) / 100,
+                profit: Math.round(profit * 100) / 100,
+                profitMargin: Math.round(profitMargin * 10) / 10,
+                unitsSold,
+                totalRevenue: Math.round(totalRevenue * 100) / 100,
+                totalCost: Math.round(totalCost * 100) / 100,
+                totalProfit: Math.round(totalProfit * 100) / 100,
+                ingredientCount: item.ingredients.length,
+                ingredients: item.ingredients.map(ing => ({
+                    name: ing.ingredient.name,
+                    quantity: ing.quantity,
+                    unit: ing.ingredient.unit,
+                    costPerUnit: parseFloat(ing.ingredient.costPerUnit || 0),
+                    totalCost: Math.round(ing.quantity * parseFloat(ing.ingredient.costPerUnit || 0) * 100) / 100
+                }))
+            };
+        });
+
+        // Sort by profit margin (highest first)
+        const sortedByMargin = [...profitAnalysis].sort((a, b) => b.profitMargin - a.profitMargin);
+
+        // Calculate summary
+        const totalRevenue = profitAnalysis.reduce((sum, item) => sum + item.totalRevenue, 0);
+        const totalCost = profitAnalysis.reduce((sum, item) => sum + item.totalCost, 0);
+        const totalProfit = profitAnalysis.reduce((sum, item) => sum + item.totalProfit, 0);
+
+        const itemsWithSales = profitAnalysis.filter(i => i.unitsSold > 0);
+        const avgProfitMargin = itemsWithSales.length > 0
+            ? itemsWithSales.reduce((sum, item) => sum + item.profitMargin, 0) / itemsWithSales.length
+            : 0;
+
+        // Find best and worst performers (only items with sales)
+        const bestPerformers = sortedByMargin.filter(i => i.unitsSold > 0).slice(0, 5);
+        const worstPerformers = sortedByMargin.filter(i => i.unitsSold > 0).slice(-5).reverse();
+        const noRecipe = profitAnalysis.filter(i => i.ingredientCount === 0);
+
+        res.json({
+            summary: {
+                totalRevenue: Math.round(totalRevenue * 100) / 100,
+                totalCost: Math.round(totalCost * 100) / 100,
+                totalProfit: Math.round(totalProfit * 100) / 100,
+                avgProfitMargin: Math.round(avgProfitMargin * 10) / 10,
+                itemsAnalyzed: profitAnalysis.length,
+                itemsWithSales: itemsWithSales.length,
+                itemsWithRecipe: profitAnalysis.filter(i => i.ingredientCount > 0).length,
+                itemsWithoutRecipe: noRecipe.length
+            },
+            bestPerformers,
+            worstPerformers,
+            noRecipe: noRecipe.slice(0, 10), // Limit to 10
+            allItems: sortedByMargin
+        });
+
+    } catch (error) {
+        console.error('Error fetching profit analysis:', error);
+        res.status(500).json({
+            error: 'Failed to fetch profit analysis',
+            message: error.message
+        });
     }
 };
