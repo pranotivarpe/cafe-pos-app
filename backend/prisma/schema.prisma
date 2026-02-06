@@ -15,6 +15,12 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED  
+  RESERVED
+}
+
 enum IngredientUnit {
   GRAMS
   KG
@@ -24,6 +30,28 @@ enum IngredientUnit {
   CUPS
   TABLESPOONS
   TEASPOONS
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEAWAY
+  DELIVERY
+}
+
+enum DeliveryPlatform {
+  DIRECT
+  ZOMATO
+  SWIGGY
+}
+
+enum DeliveryStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY_FOR_PICKUP
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
 }
 
 model User {
@@ -102,8 +130,8 @@ model IngredientStockLog {
 
 model Order {
   id          Int         @id @default(autoincrement())
-  tableId     Int
-  table       Table       @relation(fields: [tableId], references: [id])
+  tableId     Int?
+  table       Table?       @relation(fields: [tableId], references: [id])
   billNumber  String      @unique
   subtotal    Decimal     @db.Decimal(10, 2)
   tax         Decimal     @db.Decimal(10, 2)
@@ -114,6 +142,8 @@ model Order {
   createdAt   DateTime    @default(now())
   paidAt      DateTime?
   updatedAt   DateTime    @updatedAt
+  orderType       OrderType        @default(DINE_IN)
+  deliveryInfo    DeliveryInfo?    
 }
 
 model OrderItem {
@@ -168,8 +198,40 @@ model Table {
   @@map("tables")
 }
 
-enum TableStatus {
-  AVAILABLE
-  OCCUPIED  
-  RESERVED
+model DeliveryInfo {
+  id                Int              @id @default(autoincrement())
+  orderId           Int              @unique
+  order             Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  // Customer info
+  customerName      String
+  customerPhone     String
+  customerEmail     String?
+  
+  // Delivery specific
+  deliveryAddress   String?          // Null for takeaway
+  deliveryPlatform  DeliveryPlatform @default(DIRECT)
+  platformOrderId   String?          // Zomato/Swiggy order ID
+  deliveryStatus    DeliveryStatus   @default(PENDING)
+  
+  // Delivery partner info (for platform orders)
+  deliveryPartnerName   String?
+  deliveryPartnerPhone  String?
+  
+  // Timing
+  estimatedTime     DateTime?        // Estimated delivery/pickup time
+  actualTime        DateTime?        // Actual delivery/pickup time
+  
+  // Additional charges
+  deliveryFee       Decimal          @db.Decimal(10, 2) @default(0)
+  packagingFee      Decimal          @db.Decimal(10, 2) @default(0)
+  platformFee       Decimal          @db.Decimal(10, 2) @default(0)  // Commission to Zomato/Swiggy
+  discount          Decimal          @db.Decimal(10, 2) @default(0)
+  
+  // Notes
+  specialInstructions String?
+  
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 }
+

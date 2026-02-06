@@ -10,6 +10,7 @@ import ReportsPage from './pages/ReportsPage';
 import OrdersPage from "./pages/OrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import ProfitAnalysisPage from "./pages/ProfitAnalysisPage";
+import DeliveryPage from "./pages/DeliveryPage";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -49,6 +50,11 @@ function AppContent() {
           <Route path="/profit-analysis" element={
             <ProtectedRoute>
               <ProfitAnalysisPage />
+            </ProtectedRoute>
+          } />
+          <Route path="/delivery" element={
+            <ProtectedRoute>
+              <DeliveryPage />
             </ProtectedRoute>
           } />
         </Routes>

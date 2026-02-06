@@ -4,7 +4,6 @@ import {
   TrendingUp,
   TrendingDown,
   DollarSign,
-  Package,
   AlertTriangle,
   RefreshCw,
   Calendar,

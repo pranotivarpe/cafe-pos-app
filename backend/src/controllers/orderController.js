@@ -351,7 +351,8 @@ exports.updateOrderStatus = async (req, res) => {
             where: { id: orderId },
             include: {
                 table: true,
-                items: true
+                items: true,
+                deliveryInfo: true
             }
         });
 
@@ -414,12 +415,13 @@ exports.updateOrderStatus = async (req, res) => {
                     include: {
                         menuItem: true
                     }
-                }
+                },
+                deliveryInfo: true
             }
         });
 
         // Handle table status based on ALL orders for that table
-        if (status === 'PAID' || status === 'CANCELLED') {
+        if ((status === 'PAID' || status === 'CANCELLED') && existingOrder.tableId) {
             const activeOrdersOnTable = await prisma.order.count({
                 where: {
                     tableId: existingOrder.tableId,
@@ -446,10 +448,21 @@ exports.updateOrderStatus = async (req, res) => {
             }
         }
 
+        // Update delivery status if this is a delivery/takeaway order
+        if (existingOrder.deliveryInfo && (status === 'PAID' || status === 'CANCELLED')) {
+            await prisma.deliveryInfo.update({
+                where: { orderId: orderId },
+                data: {
+                    deliveryStatus: status === 'PAID' ? 'DELIVERED' : 'CANCELLED',
+                    actualTime: new Date()
+                }
+            });
+        }
+
         res.json({
             success: true,
             order,
-            tableUpdated: true
+            tableUpdated: !!existingOrder.tableId
         });
     } catch (error) {
         console.error('Update order status error:', error);

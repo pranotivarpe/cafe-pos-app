@@ -13,7 +13,6 @@ import {
   X,
   Save,
   Beaker,
-  ShoppingCart,
   History,
   ChefHat,
 } from "lucide-react";

@@ -37,6 +37,7 @@ app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/tables', require('./src/routes/tables'));
 app.use('/api/ingredients', require('./src/routes/ingredients'));
 app.use('/api/modifications', require('./src/routes/modifications'));
+app.use('/api/delivery', require('./src/routes/delivery'));
 
 app.use(errorHandler);
 
